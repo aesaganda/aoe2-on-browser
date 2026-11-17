@@ -141,7 +141,7 @@ The command panels match the original. Town Center: Create Villager, Loom, Feuda
 
 ### 2026-11-18: determinism check (recorded games)
 
-**The game's own oracle.** AoC 1.0 recordings (`.mgx`, "VER 9.4"; `tools/oracle/mgx.py` reads them) carry a sync op about every 1 s of game time. About every 40 s, one has a 28-byte block holding the world's checksums and time. A replay normally ignores them; with `DONTIGNORESYNC` on the command line it compares them (0x426BB0 sets `+0x53C`, "ignore", without it). On a mismatch it stops: "Out of sync replaying game. Replaying stopped. – worldtime: …" (string 9013, raised at 0x5FF53A in 0x5FF180). `AOE2_ARGS` now sets the guest's command line (`main.c`).
+**The game's own oracle.** AoC 1.0 recordings (`.mgx`, "VER 9.4"; `tools/oracle/mgx.py` reads them) carry a sync op each game step (about 80 ms of game time). About every 40 s, one has a 28-byte block holding the world's checksums and time. A replay normally ignores them; with `DONTIGNORESYNC` on the command line it compares them (0x426BB0 sets `+0x53C`, "ignore", without it). On a mismatch it stops: "Out of sync replaying game. Replaying stopped. – worldtime: …" (string 9013, raised at 0x5FF53A in 0x5FF180). `AOE2_ARGS` now sets the guest's command line (`main.c`).
 
 **`tools/oracle/replay_check.sh <install> <rec.mgx>`** copies the recording first into the Saved Games list and drives the menus to its replay with `DONTIGNORESYNC`. gdb watches two places: the out-of-sync branch, and the replay's world time (`[this+0x10]` in 0x5FF180) passing the last checksum. Exit 0 means in sync, 1 out of sync, 2 inconclusive. The replay reads its file ahead of play, so the harness does not count block reads; a first version did, and the last-checksum control showed it wrong.
 
