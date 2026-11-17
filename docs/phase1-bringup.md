@@ -31,6 +31,22 @@ The host (`src/linux/`) does the following:
 
 The lift now has 9,674 entries (was 7,672), still 0 errors, and 65 MB of C. The extra "unimplemented" instructions (`bound`, `arpl`, `cli`, …) come from seeds that point at data rather than code. They are never called, and a call would fail loudly.
 
+### 2026-11-17: game data from the owner's disc images
+
+**Install tree.** `tools/install_from_iso.sh <AoE2.iso> <AoE2_Conquerors.iso> orig/age2_x1.exe <root>` lays out the install the way the two setup programs would. It only unpacks:
+- `7z` for the ISO images and `cabextract` for `EMPIRES2.CAB` / `MSGAME.CAB`;
+- plus the loose files on the discs, some of them under 8.3 names on disc: `EMPIRE_1.DAT` → `data/empires2_x1.dat`, `LANGUA_1.DLL` → `language_x1.dll`.
+
+The resulting tree is 539 MB. It lives outside the repo (`~/aoe2-recomp-work/install` in WSL; ADR-0002).
+
+**Version correction.** The exe asks for `data\empires2_x1.dat`, `language_x1.dll` and `gamedata_x1.drs`, and never for the 1.0c patch's `_p1` files. So it is **AoC 1.0**, unpatched. The 1.0c patch package is therefore not used.
+
+| Step | Result | Fix |
+|---|---|---|
+| Boot 4 | `language_x1.dll` not found: the guest's current directory was the host's, not the install root | The host `chdir`s to the install root, as the AoC shortcut does (working directory = root, exe in `age2_x1\`) |
+| Boot 5 | `language_x1.dll` loads as a resource module; first unanswered import: `IsDBCSLeadByte` | `src/linux/win32_gaps.c`: the 24 imports from the Phase 0 inventory that win32hle lacks. They are registered *after* win32hle, so an upstream implementation wins. MCI/MCIWnd/DirectPlay report "unavailable" for now |
+| Boot 6 | **Reaches the EULA gate.** The game calls `EBUEula`; without the player's acceptance it quits | Waiting for the owner: accepting the licence is their decision (`AOE2_ACCEPT_EULA=1`) |
+
 ### EULA
 
 The game shows Microsoft's EULA through `EBUEulaX.dll` and exits unless the player accepts it. Accepting it is the player's decision, so the shim never accepts on its own:
