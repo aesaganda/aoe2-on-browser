@@ -24,6 +24,7 @@ void dplay_stub_register(void);    /* dplay_stub.c */
 void dplay_stub_register_com(void);
 void cdrom_mount(char letter, const char *dir, const char *label);   /* cdrom.c */
 void edit_overlay_install(void);   /* edit_overlay.c */
+void mciwnd_register(void);        /* mciwnd.c: the AVI cinematics */
 void ddraw_debug_register(void);   /* ddraw_debug.c: AOE2_TRACE_BLT / AOE2_DUMP_SURFACES */
 
 #define HKLM 0x80000002u
@@ -60,6 +61,7 @@ int main(int argc, char **argv) {
      * the directory has to exist under the install root. */
     mkdir("windows", 0755), mkdir("windows/temp", 0755);
     aoc_shims_register();           /* first: same-named shims registered earlier win */
+    mciwnd_register();              /* before win32_gaps' MCIWndCreateA */
     dplay_stub_register();
     ddraw_debug_register();
     /* The Conquerors disc image's contents, mounted as D: (cdrom.c) */

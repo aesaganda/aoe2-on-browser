@@ -45,7 +45,8 @@ case "${1:-}" in
            -ex 'printf "guest: cur_func %08x eax %08x ecx %08x edx %08x ebx %08x esp %08x ebp %08x esi %08x edi %08x\n", g_cur_func, g_eax, g_ecx, g_edx, g_ebx, g_esp, g_ebp, g_esi, g_edi'
            -ex "info registers rip" --args "${RUN[@]}")
     fi
-    ( cd / && DISPLAY="$DISP" SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}" \
+    # the intro videos would take the first clicks: off unless AOE2_SKIP_VIDEOS=0
+    ( cd / && DISPLAY="$DISP" SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}" AOE2_SKIP_VIDEOS="${AOE2_SKIP_VIDEOS:-1}" \
         "${RUN[@]}" > "$DIR/game.log" 2>&1 & echo $! > "$DIR/game.pid" )
     echo "started (display $DISP)"
     # WSL ends a session's processes with the command that started them: with --hold,

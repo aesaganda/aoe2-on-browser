@@ -83,9 +83,7 @@ static void g_CreateICA(void) {                              /* an information c
 static void g_ImmGetOpenStatus(void)    { RET(0, 1); }
 static void g_ImmGetDefaultIMEWnd(void) { RET(0, 1); }
 
-/* ---- MSVFW32: AVI cinematics (not ported yet: the game skips them on failure) ---- */
-static void g_ICInfo(void)        { RET(0, 3); }
-static void g_MCIWndCreateA(void) { fprintf(stderr, "[gaps] MCIWndCreateA(\"%s\"): videos not ported yet\n", ASTR(3) ? ASTR(3) : ""); RET(0, 4); }
+/* MSVFW32 (ICInfo, MCIWndCreateA): the AVI cinematics, mciwnd.c. */
 
 /* ---- WINMM: MCI ----
  * The game decodes its mp3 music itself and streams it through DirectSound; MCI is
@@ -107,7 +105,6 @@ static const win32hle_shim gaps[] = {
     { "SetSysColors", g_SetSysColors }, { "SystemParametersInfoA", g_SystemParametersInfoA },
     { "DrawTextExA", g_DrawTextExA }, { "CreateICA", g_CreateICA },
     { "ImmGetOpenStatus", g_ImmGetOpenStatus }, { "ImmGetDefaultIMEWnd", g_ImmGetDefaultIMEWnd },
-    { "ICInfo", g_ICInfo }, { "MCIWndCreateA", g_MCIWndCreateA },
     { "mciSendCommandA", g_mciSendCommandA },
     { NULL, NULL },
 };
