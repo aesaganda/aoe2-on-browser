@@ -1,0 +1,39 @@
+diff --git a/runtime/win32hle/user32.c b/runtime/win32hle/user32.c
+index 3b68a40..1e9ccbc 100644
+--- a/runtime/win32hle/user32.c
++++ b/runtime/win32hle/user32.c
+@@ -2328,6 +2328,18 @@ int hle_window_screen_rect(uint32_t h, int *l, int *t, int *r, int *b) {
+     return 1;
+ }
+ const char *hle_window_class(uint32_t h) { win_t *x = W(h); return x ? g_cls[x->cls].name : ""; }
++/* The windows that exist, and what a host drawing controls over a DirectDraw game
++ * needs of an edit control: on Windows a child EDIT paints itself on the screen, over
++ * the primary surface; here nothing composites child windows onto DirectDraw. */
++int hle_windows(uint32_t *out, int max) {
++    int n = 0;
++    for (int i = 0; i < MAX_WIN && n < max; i++) if (g_win[i].used && !g_win[i].destroying) out[n++] = g_win[i].hwnd;
++    return n;
++}
++int hle_window_visible(uint32_t h) { win_t *x = W(h); return x && visible(x); }
++int hle_window_is_edit(uint32_t h) { win_t *x = W(h); return x && x->kind == K_EDIT; }
++const char *hle_window_text(uint32_t h) { win_t *x = W(h); return x ? x->text : ""; }
++int hle_edit_caret(uint32_t h) { win_t *x = W(h); return x ? x->sel0 : 0; }
+ uint32_t hle_window_parent(uint32_t h) { win_t *x = W(h); return x ? (x->parent ? x->parent : x->owner) : 0; }
+ uint32_t hle_dialog_item(uint32_t dlg, uint32_t id) { return dlg_item(dlg, id); }
+ uint32_t hle_window_style(uint32_t h) { win_t *x = W(h); return x ? x->style : 0; }
+diff --git a/runtime/win32hle/win32hle.h b/runtime/win32hle/win32hle.h
+index 240ed24..307591b 100644
+--- a/runtime/win32hle/win32hle.h
++++ b/runtime/win32hle/win32hle.h
+@@ -211,6 +211,11 @@ extern volatile int hle_lbutton_reads;   /* GetKeyState/GetAsyncKeyState(VK_LBUT
+ int         hle_is_window(uint32_t h);
+ int         hle_window_screen_rect(uint32_t h, int *l, int *t, int *r, int *b);
+ const char *hle_window_class(uint32_t h);
++int         hle_windows(uint32_t *out, int max);   /* every window, by handle */
++int         hle_window_visible(uint32_t h);        /* it and all its parents are WS_VISIBLE */
++int         hle_window_is_edit(uint32_t h);        /* a built-in EDIT control */
++const char *hle_window_text(uint32_t h);           /* its text (an edit control's contents) */
++int         hle_edit_caret(uint32_t h);            /* an edit control's caret position */
+ uint32_t    hle_window_parent(uint32_t h);
+ uint32_t    hle_window_style(uint32_t h);
+ uint32_t    hle_dialog_item(uint32_t dlg, uint32_t id);
