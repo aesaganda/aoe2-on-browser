@@ -51,6 +51,10 @@ def test_leaf(ctx, va, tmp_path):
         if fails or both_ok >= MIN_OK:
             break
     v.both_ok, v.cases, v.failures, v.known = both_ok, cases, fails, known
+    out = ROOT / "build" / "test-results" / "aoe2_prototype"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{va:08X}.json").write_text(json.dumps(
+        {"va": f"0x{va:08X}", "agree": both_ok, "cases": cases, "failures": len(fails), "known": known}))
     msg = "\n".join(f"case {i}: " + "; ".join(d) for i, d in v.failures[:10])
     assert v.passed, f"sub_{va:08X}: {len(v.failures)}/{v.cases} cases differ\n{msg}"
     assert v.both_ok >= MIN_OK, f"sub_{va:08X}: only {v.both_ok} of {cases} inputs ran to completion on both sides"

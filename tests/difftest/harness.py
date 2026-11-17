@@ -65,6 +65,32 @@ class Image:
         return cls(base, bytes(img), lo, hi)
 
 
+# ----------------------------------------------------------------------------- x87 shape
+
+X87_PUSH = {"fld", "fild", "fldz", "fld1", "fldpi", "fldl2e", "fldln2", "fldlg2", "fldl2t", "fbld", "fsincos", "fptan"}
+X87_POP2 = {"fcompp", "fucompp"}
+X87_POP1 = {"fpatan", "fyl2x", "fyl2xp1"}
+
+
+def x87_shape(insns) -> tuple[int, int]:
+    """(arguments the function pops from the caller's x87 stack, peak depth it adds), by a
+    straight walk over the body. Used to give CRT helpers that take st0/st1 (_ftol, fmod)
+    their arguments, and to avoid pre-loading a value when the function uses all eight
+    registers itself: QEMU does not model x87 stack overflow/underflow, so such inputs
+    would compare garbage with garbage."""
+    d = lo = hi = 0
+    for i in insns:
+        m = i.mnemonic
+        if m in X87_PUSH:
+            d += 1
+        elif m in X87_POP2:
+            d -= 2
+        elif m in X87_POP1 or (m.startswith("f") and m.endswith("p") and m not in ("fsetpm",)):
+            d -= 1
+        lo, hi = min(lo, d), max(hi, d)
+    return -lo, hi
+
+
 # ----------------------------------------------------------------------------- inputs
 
 EDGE = (0, 1, 2, 3, 4, 7, 8, 0xFF, 0x100, 0x7FFF, 0x8000, 0xFFFF, 0x10000,
@@ -83,6 +109,8 @@ class Gen:
     (including halves for rounding, signed zero, NaN/inf/denormals), and noise."""
     img: Image
     rng: random.Random
+    x87_args: int = 0        # values the function pops from the caller's x87 stack
+    x87_peak: int = 0        # how deep it pushes on top of them
 
     def ptr(self) -> int:
         r = self.rng.random()
@@ -159,8 +187,13 @@ class Gen:
         stack = bytearray(self.fill(STACK_LEN))
         # [esp] = return address, then 32 argument slots
         struct.pack_into("<I32I", stack, ESP0 - STACK, EXIT, *args)
-        depth = self.rng.choice((0, 0, 1))
-        return {"regs": regs, "depth": depth, "st0": self.st0(), "heap": heap, "stack": bytes(stack)}
+        # x87: the function's own arguments, plus sometimes one caller value underneath
+        # (checks that it survives) when that cannot overflow the 8 registers
+        depth = self.x87_args
+        if self.x87_args + self.x87_peak < 8 and self.rng.random() < 0.33:
+            depth += 1
+        st = [self.st0() for _ in range(depth)]
+        return {"regs": regs, "depth": depth, "st": st, "heap": heap, "stack": bytes(stack)}
 
 
 def write_cases(path: Path, img: Image, cases) -> None:
@@ -170,7 +203,8 @@ def write_cases(path: Path, img: Image, cases) -> None:
         for va, n in regions:
             f.write(struct.pack("<II", va, n))
         for c in cases:
-            f.write(struct.pack("<8III d", *c["regs"], c["depth"], 0, c["st0"]))
+            st = (c["st"] + [0.0] * 8)[:8]
+            f.write(struct.pack("<8III 8d", *c["regs"], c["depth"], 0, *st))
             f.write(c["heap"])
             f.write(c["stack"])
 
@@ -202,8 +236,9 @@ class Oracle:
         mu.mem_write(EXIT, b"\xf4")                            # hlt (never executed: we stop on arrival)
         mu.reg_write(U.UC_X86_REG_FPCW, FPCW_WINDOWS)
         if c["depth"]:
-            mu.mem_write(FPBUF, struct.pack("<d", c["st0"]))
-            code = b"\xdd\x05" + struct.pack("<I", FPBUF)    # fld qword [FPBUF]
+            # fld qword [FPBUF+8k], deepest first, so st[0] ends on top
+            mu.mem_write(FPBUF, struct.pack("<%dd" % c["depth"], *c["st"]))
+            code = b"".join(b"\xdd\x05" + struct.pack("<I", FPBUF + 8 * k) for k in reversed(range(c["depth"])))
             mu.mem_write(TRAMP, code)
             mu.emu_start(TRAMP, TRAMP + len(code))
         for r, v in zip(UREG, c["regs"]):
@@ -226,6 +261,11 @@ class Oracle:
             return Result("escape", detail=f"{escaped[0]:08X}")
         if mu.reg_read(U.UC_X86_REG_EIP) != EXIT:
             return Result("timeout")
+        sw = mu.reg_read(U.UC_X86_REG_FPSW)
+        if sw & 0x41 == 0x41:
+            # x87 stack fault (SF+IE): the input broke the function's x87 contract, e.g. _ftol
+            # called with an empty stack. Masked on real hardware, but not a meaningful input.
+            return Result("invalid", detail=f"x87 stack fault, FPSW={sw:04X}")
         regs = tuple(mu.reg_read(r) & 0xFFFFFFFF for r in UREG)
         # the stack starts empty with TOP=0 and each push decrements TOP (a full stack of 8
         # would read as 0 too; no leaf function leaves 8 values behind)
@@ -255,15 +295,41 @@ class Oracle:
 BODY_RE = r"^void sub_%08X\(void\) \{\n.*?^\}\n"
 
 
+def body_index(gen: Path) -> dict:
+    """{va: [file, start, end]} of every lifted body, built once per lift and cached next to
+    it. Parallel test workers then read only their function's bytes instead of all 50 MB
+    of C each (which drvfs under WSL does not survive reliably)."""
+    import fcntl
+    import json
+    idx = gen / ".body_index.json"
+    stamp = gen / "recomp_funcs.h"
+    with open(gen / ".body_index.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if idx.exists() and (not stamp.exists() or idx.stat().st_mtime >= stamp.stat().st_mtime):
+            return {int(k, 16): v for k, v in json.loads(idx.read_text()).items()}
+        out = {}
+        start_re = re.compile(rb"^void sub_([0-9A-F]{8})\(void\) \{\n", re.M)
+        end_re = re.compile(rb"^\}\n", re.M)
+        for f in sorted(gen.glob("recomp_*.c")):
+            data = f.read_bytes()
+            for m in start_re.finditer(data):
+                e = end_re.search(data, m.end())
+                out[f"{int(m.group(1), 16):08X}"] = [f.name, m.start(), e.end()]
+        idx.write_text(json.dumps(out))
+        return {int(k, 16): v for k, v in out.items()}
+
+
 def extract_body(gen: Path, va: int) -> str:
-    pat = re.compile(BODY_RE % va, re.M | re.S)
-    for f in sorted(gen.glob("recomp_*.c")):
-        text = f.read_text()
-        if ("sub_%08X(void) {" % va) in text:
-            m = pat.search(text)
-            if m:
-                return m.group(0)
-    raise KeyError(f"sub_{va:08X} not in {gen}")
+    entry = body_index(gen).get(va)
+    if entry is None:
+        raise KeyError(f"sub_{va:08X} not in {gen}")
+    name, start, end = entry
+    with open(gen / name, "rb") as f:
+        f.seek(start)
+        text = f.read(end - start).decode()
+    if not re.match(BODY_RE % va, text, re.M | re.S):
+        raise RuntimeError(f"stale body index for sub_{va:08X}; delete {gen}/.body_index.json")
+    return text
 
 
 def build_subject(body: str, va: int, workdir: Path, cc: str = "gcc", opt: str = "-O1") -> Path:
@@ -354,9 +420,13 @@ KNOWN = ("fnstsw-top", "div-no-trap")
 def compare(want: Result, got: Result, mnems: set[str] = frozenset(), known: dict | None = None,
             initial=lambda a: None) -> list[str]:
     known = known if known is not None else {}
+    if want.status == "invalid" or "timeout" in (want.status, got.status):
+        # an input outside the function's contract, or a resource limit (Unicorn's
+        # instruction budget and the lifted 200 ms alarm are not the same length): no verdict
+        return []
     if want.status != got.status:
         if want.status != "ok" and got.status != "ok":
-            return []                     # both refused this input (fault/timeout): not a verdict
+            return []                     # both refused this input (fault): not a verdict
         if (want.status == "fault" and "UC_ERR_EXCEPTION" in want.detail and got.status == "ok"
                 and mnems & {"div", "idiv"}):
             known["div-no-trap"] = known.get("div-no-trap", 0) + 1
@@ -403,8 +473,14 @@ class Verdict:
 
 def difftest(img: Image, gen: Path, va: int, body_range: tuple[int, int], ncases: int = 200,
              seed: int = 1, workdir: Path | None = None) -> Verdict:
+    import capstone
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+    lo, hi = body_range
+    insns = list(md.disasm(img.data[lo - img.base:hi - img.base], lo))
+    mnems = {i.mnemonic for i in insns}
     rng = random.Random((seed << 32) ^ va)
     g = Gen(img, rng)
+    g.x87_args, g.x87_peak = x87_shape(insns)
     cases = [g.case(i) for i in range(ncases)]
     tmp = Path(workdir or tempfile.mkdtemp(prefix=f"dt_{va:08X}_"))
     tmp.mkdir(parents=True, exist_ok=True)
@@ -413,10 +489,6 @@ def difftest(img: Image, gen: Path, va: int, body_range: tuple[int, int], ncases
     oracle = Oracle(img, va, body_range)
     fails, both_ok, refused = [], 0, 0
     nan0 = NAN_PAYLOAD_DIFFS
-    import capstone
-    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
-    lo, hi = body_range
-    mnems = {i.mnemonic for i in md.disasm(img.data[lo - img.base:hi - img.base], lo)}
     known: dict = {}
     for i, c in enumerate(cases):
         want = oracle.run(c)

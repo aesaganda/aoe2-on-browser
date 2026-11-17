@@ -47,7 +47,7 @@ static unsigned char *slurp(const char *p, long *n) {
 
 /* cases.bin layout (little endian), all u32 unless noted:
  *   header: magic 'DTC1', ncase, nregion, {va, len} * nregion
- *   per case: regs[8], depth, pad, st0 (f64), then the initial bytes of regions 1..n-1
+ *   per case: regs[8], depth, pad, st[8] (f64, st[0] = top), then the initial bytes of regions 1..n-1
  *   (region 0 is the image, identical for every case and read from image.bin) */
 int main(int argc, char **argv) {
     long ni, nc;
@@ -74,14 +74,14 @@ int main(int argc, char **argv) {
 
     for (uint32_t c = 0; c < ncase; c++) {
         uint32_t regs[8], depth;
-        double st0;
-        memcpy(regs, p, 32); memcpy(&depth, p + 32, 4); memcpy(&st0, p + 40, 8); p += 48;
+        double st[8];
+        memcpy(regs, p, 32); memcpy(&depth, p + 32, 4); memcpy(st, p + 40, 64); p += 104;
         for (uint32_t i = 1; i < nreg; i++) { R[i].init = p; p += R[i].len; }
         for (uint32_t i = 0; i < nreg; i++) memcpy(mem + R[i].va, R[i].init, R[i].len);
         g_eax = regs[0]; g_ecx = regs[1]; g_edx = regs[2]; g_ebx = regs[3];
         g_esp = regs[4]; g_ebp = regs[5]; g_esi = regs[6]; g_edi = regs[7];
-        memset(g_st, 0, sizeof g_st);
-        g_st[0] = st0; g_fp_top = (int)depth; g_fpu_cw = 0x027F;
+        memcpy(g_st, st, sizeof g_st);   /* g_st[0] is st(0), the top */
+        g_fp_top = (int)depth; g_fpu_cw = 0x027F;
 
         printf("C %u\n", c);
         struct itimerval t = {{0, 0}, {0, 200000}};      /* 200 ms per case */
