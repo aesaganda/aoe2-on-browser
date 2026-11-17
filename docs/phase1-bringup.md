@@ -128,13 +128,14 @@ Tools added for this step:
 | Minimap black (not even its frame) | The minimap panel (draw at 0x4484B0) left early because its diamond mask had not loaded. The mask is `map800.bmp`, resource 50411 in `interfac.drs` 'bina'. 0x4B03F0 copies it to `GetTempFileNameA(GetTempPathA())` and opens it with `OpenFile`. win32hle's temp path, `C:\WINDOWS\TEMP\`, did not exist under the install root | `main.c` creates `windows/temp` under the install root. Checked with the `marco` cheat: the minimap draws the whole map (terrain, water, forest, resources). Before that, black is just unexplored land |
 | Chat: after Return the game stays "Game Paused" and the picture freezes | Single-player chat pauses the game (comm state `+0x1E3C` 4). Return does unpause it (0x4309D0 → state 5). But the chat EDIT is destroyed while it has focus, and win32hle set the focus to none. The game's key dispatch (0x420BF0) only takes keys when `GetFocus()` is its window or a child, so input was dead, and the picture stayed frozen even with the game unpaused (not traced further: the fix below cured both) | Patch 0003: hiding or destroying the focus window moves the focus to its parent, with WM_KILLFOCUS/WM_SETFOCUS, as Windows does. Chat, Return and cheats work and the game resumes |
 
-## Open
+**Sound and music.** The game decodes its mp3 music (`sound\stream\*.mp3`) itself, in its own stream code around 0x52EC10, and plays it through DirectSound. MCI is only asked to open the CD-audio device by type id (`MCI_OPEN_TYPE_ID`), which a data-only disc does not have either. Checked with SDL's `disk` audio driver (`SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=…`): 31 s at the main menu recorded 44.1 kHz stereo with signal in 300 of 308 tenth-second windows. That is the menu theme.
 
-- Command-panel icons to check against the original.
+The command panels match the original. Town Center: Create Villager, Loom, Feudal Age, Ungarrison, Town Bell. Villager: Build Economic, Build Military, Repair, Garrison.
+
+## Open
 
 - **SEH/C++ EH dispatch:** win32hle ends the run on `RaiseException`. The frame registry is in place; the guest-chain walk is not.
 - **DirectInput 7** (`DirectInputCreateEx`): win32hle has DirectInput 3/5 devices, but not the v7 entry point.
-- **MCI:** mp3 music. **MCIWnd:** AVI cinematics.
+- **MCIWnd:** AVI cinematics.
 - **Real DirectPlay:** Phase 3.
-- **Sound:** run with a real audio driver and listen.
 - **Determinism oracle:** recorded games.

@@ -87,7 +87,10 @@ static void g_ImmGetDefaultIMEWnd(void) { RET(0, 1); }
 static void g_ICInfo(void)        { RET(0, 3); }
 static void g_MCIWndCreateA(void) { fprintf(stderr, "[gaps] MCIWndCreateA(\"%s\"): videos not ported yet\n", ASTR(3) ? ASTR(3) : ""); RET(0, 4); }
 
-/* ---- WINMM: MCI (mp3 music) not ported yet ---- */
+/* ---- WINMM: MCI ----
+ * The game decodes its mp3 music itself and streams it through DirectSound; MCI is
+ * only asked to open the CD-audio device (by type id, for Red Book tracks), which
+ * a data-only disc does not have either. Failing the open is the right answer. */
 static void g_mciSendCommandA(void) {                        /* (device, msg, flags, params) */
     TRACE("mciSendCommandA(dev %u, msg 0x%X)\n", A32(0), A32(1));
     RET(A32(1) == 0x803 /* MCI_OPEN */ ? 256 + 50 /* MCIERR_DEVICE_NOT_INSTALLED */ : 0, 4);
