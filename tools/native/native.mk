@@ -24,6 +24,9 @@ GEN_SRC := $(sort $(wildcard $(GEN)/recomp_*.c)) $(GEN)/recomp_dispatch.c
 # the list comes from the submodule: the patched copy may not exist yet when make parses this
 HLE_SRC := $(addprefix $(PC)/win32hle/,$(notdir $(filter-out %_selftest.c,$(wildcard $(PC_SRC)/runtime/win32hle/*.c))))
 $(PC)/win32hle/%.c $(PC)/win32hle/%.h $(PC)/recomp32/%.h: $(PC_STAMP) ;
+# ...and they are not intermediate files: without this make deletes the copied sources
+# after a build, and the next build (or the trace build) finds them gone.
+.SECONDARY:
 # recomp32's trace and crash reporter include <windows.h> (they serve native32), so the
 # few symbols the lifted code expects from them come from src/linux/runtime_glue.c.
 RT_SRC  :=
@@ -35,7 +38,7 @@ SDL_LIBS   := $(shell pkg-config --libs sdl2 SDL2_ttf)
 
 # The lift is 50 MB of C: -O1 keeps the build to minutes; hot paths get -O2 later.
 GEN_OPT  ?= -O1
-CFLAGS_COMMON := -g -fno-strict-aliasing -I$(PC)/recomp32 -I$(PC)/win32hle -I$(GEN)
+CFLAGS_COMMON := -g -fno-strict-aliasing $(TRACE_DEFS) -I$(PC)/recomp32 -I$(PC)/win32hle -I$(GEN)
 CFLAGS_GEN := $(GEN_OPT) -w -DRECOMP_LOCAL_REGS $(CFLAGS_COMMON)
 CFLAGS_RT  := -O1 -w $(CFLAGS_COMMON) $(SDL_CFLAGS)
 

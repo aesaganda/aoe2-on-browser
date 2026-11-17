@@ -17,7 +17,7 @@ set -u
 DIR=${AOE2_SESSION_DIR:-/tmp/aoe2-session}
 DISP=":${XVFB_DISPLAY:-78}"
 mkdir -p "$DIR"
-BIN="$(cd "$(dirname "$0")/../.." && pwd)/build/native/aoe2"
+BIN=${AOE2_BIN:-"$(cd "$(dirname "$0")/../.." && pwd)/build/native/aoe2"}
 
 geom() {   # picture rectangle on screen: x y w h (cached)
   if [[ -s "$DIR/geom" ]]; then cat "$DIR/geom"; return; fi
@@ -79,7 +79,10 @@ case "${1:-}" in
   stop)
     kill "$(cat "$DIR/game.pid" 2>/dev/null)" 2>/dev/null; sleep 1
     kill -9 "$(cat "$DIR/game.pid" 2>/dev/null)" 2>/dev/null
-    kill "$(cat "$DIR/xvfb.pid" 2>/dev/null)" 2>/dev/null
+    # gdb's child and any session started with another AOE2_BIN, and our Xvfb
+    pkill -9 -f "/build/native[^ ]*/aoe2 " 2>/dev/null
+    kill "$(cat "$DIR/xvfb.pid" 2>/dev/null)" 2>/dev/null; pkill -f "Xvfb $DISP" 2>/dev/null
+    sleep 1
     echo stopped;;
   *) sed -n 2,14p "$0"; exit 64;;
 esac

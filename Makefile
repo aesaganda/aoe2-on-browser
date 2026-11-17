@@ -13,7 +13,7 @@ GEN        := $(BUILD)/lift/gen
 GEN_STAMP  := $(GEN)/recomp_funcs.h
 PYTEST     := $(PY) -m pytest -q -p no:cacheprovider -n auto -rA
 
-.PHONY: help setup recon ghidra docs lift native test test-synthetic test-binary test-pcrecomp sweep clean
+.PHONY: help setup recon ghidra docs lift native native-trace test test-synthetic test-binary test-pcrecomp sweep clean
 
 help:
 	@echo "make setup        one-time toolchain (venv, Ghidra) - see tools/setup-wsl.sh"
@@ -59,6 +59,11 @@ test: test-pcrecomp test-synthetic test-binary
 # Phase 1: native Linux binary (lifted code + pcrecomp win32hle + SDL2) -> build/native/aoe2
 native: $(GEN_STAMP)
 	$(MAKE) -f tools/native/native.mk -j$$(nproc)
+
+# The same with every lifted function's entry counted (runtime_glue.c: kill -USR2 to
+# reset, again to dump /tmp/aoe2-funcs.txt). Slower; its own objects and binary.
+native-trace: $(GEN_STAMP)
+	$(MAKE) -f tools/native/native.mk -j$$(nproc) TRACE_DEFS=-DRECOMP_TRACE OBJ=build/native-trace/obj BIN=build/native-trace/aoe2
 
 # Every leaf function (not just the 20 prototypes), 150 random states each: ~13 min on 20 cores.
 sweep: $(GEN_STAMP)
