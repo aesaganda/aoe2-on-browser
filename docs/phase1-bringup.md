@@ -35,6 +35,7 @@ The lift now has 9,674 entries (was 7,672), still 0 errors, and 65 MB of C. The 
 
 **Install tree.** `tools/install_from_iso.sh <AoE2.iso> <AoE2_Conquerors.iso> orig/age2_x1.exe <root>` lays out the install the way the two setup programs would. It only unpacks:
 - `7z` for the ISO images and `cabextract` for `EMPIRES2.CAB` / `MSGAME.CAB`;
+- `ffmpeg` for MPEG-1 copies of the AVI cinematics (`tools/transcode_videos.sh`, added 2026-11-18, ADR-0004);
 - plus the loose files on the discs, some of them under 8.3 names on disc: `EMPIRE_1.DAT` → `data/empires2_x1.dat`, `LANGUA_1.DLL` → `language_x1.dll`.
 
 The resulting tree is 539 MB. It lives outside the repo (`~/aoe2-recomp-work/install` in WSL; ADR-0002).
@@ -134,9 +135,10 @@ The command panels match the original. Town Center: Create Villager, Loom, Feuda
 
 **Exceptions.** AoC never throws. Its only `RaiseException` is the CRT's floating-point path, and all 13 catch/except landing pads are in the CRT. So guest exception dispatch is not ported; see ADR-0003.
 
+**Cinematics** (ADR-0004). The game asks `ICInfo('vidc','iv50')` at start-up and turns its videos off without Indeo 5. The four AVIs are Indeo 5, 320×240 at 15 fps, with PCM sound. Install-time MPEG-1 copies are played by `src/linux/mciwnd.c` (pl_mpeg). The MCIWnd is a win32hle child window with a host window procedure; the game subclasses it, sends MCI_PLAY and polls `MCIWNDM_GETMODEA` for "stopped". The game switches to 640×480×16 for videos and doubles the window. Frames are painted in true colour by patch 0004's `hle_screen_rgb_hook`, and sound is a win32hle audio stream. Checked: Microsoft logo → Ensemble logo → intro → main menu, and a click skips. The `disk` driver recorded the logo's sound (signal in 166 of 182 tenth-second windows).
+
 ## Open
 
 - **DirectInput 7** (`DirectInputCreateEx`): win32hle has DirectInput 3/5 devices, but not the v7 entry point.
-- **MCIWnd:** AVI cinematics.
 - **Real DirectPlay:** Phase 3.
 - **Determinism oracle:** recorded games.
