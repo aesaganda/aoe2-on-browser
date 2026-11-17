@@ -1,0 +1,28 @@
+# Original game binaries and data: user-supplied, never committed (ADR-0002)
+/orig/
+*.exe
+*.dll
+*.iso
+*.drs
+*.dat
+*.mgx
+*.mgz
+
+# Anything derived from the binary's code (lifted C, disassembly dumps,
+# Ghidra projects, extracted bytes) stays local (ADR-0002)
+/build/
+/out/
+*.gpr
+*.rep/
+
+# Python / tooling
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
