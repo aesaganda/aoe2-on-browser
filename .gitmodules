@@ -1,3 +1,6 @@
 [submodule "third_party/pcrecomp"]
 	path = third_party/pcrecomp
 	url = https://github.com/sp00nznet/pcrecomp
+[submodule "third_party/pl_mpeg"]
+	path = third_party/pl_mpeg
+	url = https://github.com/phoboslab/pl_mpeg.git

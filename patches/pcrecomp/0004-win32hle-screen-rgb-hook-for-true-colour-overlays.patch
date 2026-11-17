@@ -1,0 +1,64 @@
+--- a/runtime/win32hle/win32hle.h
++++ b/runtime/win32hle/win32hle.h
+@@ -370,6 +370,12 @@
+ extern int (*hle_screen_cursor_hook)(void);   /* nonzero: show the cursor the guest set (its Win32 menus); unset: the game draws its own */
+ extern void (*hle_screen_frame_hook)(const uint8_t *px, int w, int h, int pitch, int bpp);   /* each shown frame */
+ extern int (*hle_screen_compose_hook)(const uint8_t *px16, int pitch, int w, int h, uint32_t *out);   /* a 2x picture */
++/* True-colour content over the shown frame (a video an MCIWnd window plays).
++ * Asked first with px NULL: nonzero if it has something to paint now. Then an
++ * 8 or 16 bpp frame is converted to XRGB8888 (w x h, packed) and it paints
++ * over that. While it has something, frames are shown at the pump's pace even
++ * when the game's own picture did not change. */
++extern int (*hle_screen_rgb_hook)(uint32_t *px, int w, int h);
+ /* Preferred over compose_hook when set: the presenter scales the 1x frame and
+  * blends this 2w x 2h ARGB8888 overlay (units' 2x pixels, transparent
+  * elsewhere) over it, so the CPU does not upscale the whole frame. *dx..*dh
+--- a/runtime/win32hle/screen.c
++++ b/runtime/win32hle/screen.c
+@@ -99,6 +99,7 @@
+ }
+ static uint32_t *g_conv;                                 /* 8-bit frames converted */
+ static size_t g_conv_n;
++int (*hle_screen_rgb_hook)(uint32_t *px, int w, int h);
+ void (*hle_screen_frame_hook)(const uint8_t *px, int w, int h, int pitch, int bpp);   /* a recorder, a checksum */
+ /* A host's own picture at twice the size (an HD layer): fills out with 2w x
+  * 2h XRGB from the 16-bit frame and returns 1, or returns 0 for the 1x. */
+@@ -286,7 +287,8 @@
+     if (!hle_dd_frame(&px, &w, &h, &pitch, &bpp, &pal, &seq) && !hle_gdi_window_frame(&px, &w, &h, &pitch, &bpp, &seq)) return;
+     uint32_t now = hle_ticks_ms();
+     g_src_w = w, g_src_h = h;
+-    if (!flip && seq == g_shown_seq && now - g_last_present < 250) return;
++    int rgb = (bpp == 8 || bpp == 16) && hle_screen_rgb_hook && hle_screen_rgb_hook(NULL, w, h);
++    if (!flip && seq == g_shown_seq && now - g_last_present < 250 && !rgb) return;
+     if (!flip && now - g_last_present < 15) return;
+     g_shown_seq = seq, g_last_present = now;
+     if (hle_screen_frame_hook) hle_screen_frame_hook(px, w, h, pitch, bpp);
+@@ -344,7 +346,8 @@
+         if (g_hd_n < (size_t)w * h * 4) { free(g_hd); g_hd_n = (size_t)w * h * 4; g_hd = (uint32_t *)malloc(g_hd_n * 4); }
+         hd = g_hd && hle_screen_compose_hook(px, pitch, w, h, g_hd);
+     }
+-    int fmt = bpp == 16 && !hd ? SDL_PIXELFORMAT_RGB565 : SDL_PIXELFORMAT_RGB888;
++    if (rgb && (hd || ov)) rgb = 0;                   /* the HD paths draw their own */
++    int fmt = bpp == 16 && !hd && !rgb ? SDL_PIXELFORMAT_RGB565 : SDL_PIXELFORMAT_RGB888;
+     int tw = hd ? 2 * w : w, th = hd ? 2 * h : h;
+     if (!g_tex || g_tex_w != tw || g_tex_h != th || g_tex_fmt != fmt) {
+         if (g_tex) SDL_DestroyTexture(g_tex);
+@@ -360,6 +363,18 @@
+                 uint32_t e = pal ? pal[px[(size_t)y * pitch + x]] : 0;   /* PALETTEENTRY r, g, b */
+                 g_conv[(size_t)y * w + x] = 0xFF000000u | (e & 0xFF) << 16 | (e & 0xFF00) | (e >> 16 & 0xFF);
+             }
++        if (rgb) hle_screen_rgb_hook(g_conv, w, h);
++        SDL_UpdateTexture(g_tex, NULL, g_conv, w * 4);
++    } else if (rgb) {                                 /* 16 bpp under true-colour content */
++        if (g_conv_n < (size_t)w * h) { free(g_conv); g_conv_n = (size_t)w * h; g_conv = (uint32_t *)malloc(g_conv_n * 4); }
++        for (int y = 0; y < h; y++) {
++            const uint16_t *row = (const uint16_t *)(px + (size_t)y * pitch);
++            for (int x = 0; x < w; x++) {
++                uint32_t c = row[x], r = c >> 11, g = c >> 5 & 63, b = c & 31;
++                g_conv[(size_t)y * w + x] = 0xFF000000u | (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
++            }
++        }
++        hle_screen_rgb_hook(g_conv, w, h);
+         SDL_UpdateTexture(g_tex, NULL, g_conv, w * 4);
+     } else {
+         SDL_UpdateTexture(g_tex, NULL, px, pitch);
