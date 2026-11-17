@@ -21,16 +21,17 @@ void aoc_shims_register(void);     /* aoc_shims.c */
 void win32_gaps_register(void);    /* win32_gaps.c */
 void dplay_stub_register(void);    /* dplay_stub.c */
 void dplay_stub_register_com(void);
+void cdrom_mount(char letter, const char *dir, const char *label);   /* cdrom.c */
 
 #define HKLM 0x80000002u
 #define AOC_KEY "Software\\Microsoft\\Microsoft Games\\Age of Empires II: The Conquerors Expansion\\1.0"
 #define AOK_KEY "Software\\Microsoft\\Microsoft Games\\Age of Empires\\2.0"
 
-static void seed_registry(void) {
+static void seed_registry(int disc) {
     /* What the installer writes and the game reads at start. Values are added here
      * as the boot log shows the game asking for them (see docs/phase1-bringup.md). */
     hle_reg_set_string(HKLM, AOC_KEY, "EXE Path", "C:\\age2_x1");
-    hle_reg_set_string(HKLM, AOC_KEY, "CDPath", "C:\\");
+    hle_reg_set_string(HKLM, AOC_KEY, "CDPath", disc ? "D:\\" : "C:\\");
     hle_reg_set_string(HKLM, AOK_KEY, "EXE Path", "C:\\");
     hle_reg_set_string(HKLM, AOK_KEY, "CDPath", "C:\\");
 }
@@ -53,10 +54,20 @@ int main(int argc, char **argv) {
     if (chdir(root) != 0) { perror(root); return 66; }
     aoc_shims_register();           /* first: same-named shims registered earlier win */
     dplay_stub_register();
+    /* The Conquerors disc image's contents, mounted as D: (cdrom.c) */
+    char disc[PATH_MAX + 16], labelf[PATH_MAX + 16], label[64] = "";
+    snprintf(disc, sizeof disc, "%s/cdrom", root);
+    snprintf(labelf, sizeof labelf, "%s/cdrom.label", root);
+    FILE *lf = fopen(labelf, "r");
+    int have_disc = lf && fgets(label, sizeof label, lf) && access(disc, R_OK) == 0;
+    if (lf) fclose(lf);
+    label[strcspn(label, "\r\n ")] = 0;      /* ISO 9660 pads the volume ID with spaces */
+    if (have_disc) cdrom_mount('D', disc, label);
+    else fprintf(stderr, "[aoe2] no disc image at %s: single player will ask for the CD\n", disc);
     recomp_host_init();
     dplay_stub_register_com();
     win32_gaps_register();          /* last: fills only what win32hle does not answer */
-    seed_registry();
+    seed_registry(have_disc);
     /* The SDL window DirectDraw presents into (pcrecomp screen.c). AOE2_HEADLESS=1: none. */
     const char *hl = getenv("AOE2_HEADLESS");
     if (hle_screen_open("Age of Empires II: The Conquerors", 0, hl && !strcmp(hl, "1")) != 0)

@@ -52,6 +52,14 @@ cp -f "$EXE" "$OUT/age2_x1/age2_x1.exe"
 # AoC detects the base game by FindFirstFile("empires2.exe") in the install root; it
 # never runs it. The base installer puts the disc's EMPIRES2.EXE there, and so do we.
 cp -f "$WORK/aok/GAME/empires2.exe" "$OUT/empires2.exe"
+# The Conquerors disc itself, for the host to present as a CD-ROM drive: the game
+# checks for it before single player (registry CDPath -> GetDriveType == CDROM ->
+# GetVolumeInformation label), as Windows would see the mounted image. Its contents
+# and its ISO 9660 volume label (primary volume descriptor, offset 0x8028, 32 bytes).
+rm -rf "$OUT/cdrom" && mkdir -p "$OUT/cdrom"
+cp -r "$WORK/aoc/." "$OUT/cdrom/"
+dd if="$AOC_ISO" bs=1 skip=$((0x8028)) count=32 2>/dev/null | tr -d ' \000' > "$OUT/cdrom.label"   # padded with spaces; d-characters have none
+
 # The licence text the game's EULA step refers to, and the readme
 for f in EULAX.RTF READMEX.RTF; do
   [[ -f "$WORK/aoc/$f" ]] && cp -f "$WORK/aoc/$f" "$OUT/$(echo "$f" | tr 'A-Z' 'a-z')"

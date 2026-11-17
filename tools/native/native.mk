@@ -27,7 +27,7 @@ $(PC)/win32hle/%.c $(PC)/win32hle/%.h $(PC)/recomp32/%.h: $(PC_STAMP) ;
 # recomp32's trace and crash reporter include <windows.h> (they serve native32), so the
 # few symbols the lifted code expects from them come from src/linux/runtime_glue.c.
 RT_SRC  :=
-APP_SRC := src/linux/main.c src/linux/runtime_glue.c src/linux/aoc_shims.c src/linux/win32_gaps.c src/linux/dplay_stub.c
+APP_SRC := src/linux/main.c src/linux/runtime_glue.c src/linux/aoc_shims.c src/linux/win32_gaps.c src/linux/dplay_stub.c src/linux/cdrom.c
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 SDL2_ttf)
 SDL_LIBS   := $(shell pkg-config --libs sdl2 SDL2_ttf)
