@@ -1,6 +1,6 @@
 # ADR-0001: x86 → C lifter
 
-- **Status:** proposed (needs the owner's decision; see "Decision")
+- **Status:** accepted 2026-11-17 by the project owner. The prototype evidence is in `docs/phase0-report.md` §4.
 - **Date:** 2026-11-17
 - **Deciders:** project owner
 
@@ -48,11 +48,15 @@ Notes:
 - **remill** gives instruction semantics only. Control-flow recovery, dispatch, the runtime and an Emscripten recipe would all be ours. The CFG-recovery tools around it are AGPL and archived or unmaintained.
 - **NFSU2Recomp** has changed licence. Its MIT snapshot is fine to read but is not a base to build on, and its runtime is D3D9/macOS.
 
-### What we could not verify in this session
+### Verification after the owner's decision
 
-We read pcrecomp's source, but it was not run on AoE2: running a freshly cloned third-party tool was blocked by the session's permission policy. Its accuracy on this binary is therefore unproven. The per-claim marks above say what was checked by reading.
+When this ADR was proposed, pcrecomp had only been read: running a freshly cloned tool was blocked until the owner approved it. Once approved, it was pinned at `a9fe1aa` and run:
 
-## Decision (proposed)
+- **Its own suite on Linux:** 380/380 instruction cases match Unicorn. Linking needed a `-lm` wrapper, `tools/cc-lm.sh`.
+- **Whole-image lift of AoE2:** 7,672 entries, 0 errors, 2 unimplemented instructions. The 53.6 MB of C compiles with gcc.
+- **Our harness:** 20/20 prototype leaves match the CPU bit for bit, apart from 3 documented divergences, plus the sweep over all leaves. Details are in phase0-report §4.
+
+## Decision
 
 **Use pcrecomp (MIT) as the lifter and runtime base, pinned to a reviewed commit and vendored as a fork.** On top of it, keep:
 
