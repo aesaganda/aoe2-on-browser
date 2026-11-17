@@ -19,6 +19,8 @@
 
 void aoc_shims_register(void);     /* aoc_shims.c */
 void win32_gaps_register(void);    /* win32_gaps.c */
+void dplay_stub_register(void);    /* dplay_stub.c */
+void dplay_stub_register_com(void);
 
 #define HKLM 0x80000002u
 #define AOC_KEY "Software\\Microsoft\\Microsoft Games\\Age of Empires II: The Conquerors Expansion\\1.0"
@@ -43,15 +45,22 @@ int main(int argc, char **argv) {
     snprintf(exe, sizeof exe, "%s/age2_x1/age2_x1.exe", root);
     if (access(exe, R_OK) != 0) { perror(exe); return 66; }
 
+    win32hle_trace = getenv("AOE2_TRACE_IMPORTS") != NULL;   /* every import call, by name */
     hle_set_drive('C', root);
     /* The AoC shortcut starts age2_x1\age2_x1.exe with the install root as the
      * working directory: language_x1.dll and data\ are found relative to it.
      * win32hle's current directory is the host's. */
     if (chdir(root) != 0) { perror(root); return 66; }
     aoc_shims_register();           /* first: same-named shims registered earlier win */
+    dplay_stub_register();
     recomp_host_init();
+    dplay_stub_register_com();
     win32_gaps_register();          /* last: fills only what win32hle does not answer */
     seed_registry();
+    /* The SDL window DirectDraw presents into (pcrecomp screen.c). AOE2_HEADLESS=1: none. */
+    const char *hl = getenv("AOE2_HEADLESS");
+    if (hle_screen_open("Age of Empires II: The Conquerors", 0, hl && !strcmp(hl, "1")) != 0)
+        fprintf(stderr, "[aoe2] no window; continuing headless\n");
     if (recomp_host_boot_permissive(exe) != 0) {
         fprintf(stderr, "boot failed: %s\n", exe);
         return 70;
