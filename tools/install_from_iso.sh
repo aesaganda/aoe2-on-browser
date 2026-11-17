@@ -49,4 +49,11 @@ for d in sound campaign avi; do
   cp -rf "$WORK/aoc/GAME/$d/." "$OUT/$d/"
 done
 cp -f "$EXE" "$OUT/age2_x1/age2_x1.exe"
+# AoC detects the base game by FindFirstFile("empires2.exe") in the install root; it
+# never runs it. The base installer puts the disc's EMPIRES2.EXE there, and so do we.
+cp -f "$WORK/aok/GAME/empires2.exe" "$OUT/empires2.exe"
+# The licence text the game's EULA step refers to, and the readme
+for f in EULAX.RTF READMEX.RTF; do
+  [[ -f "$WORK/aoc/$f" ]] && cp -f "$WORK/aoc/$f" "$OUT/$(echo "$f" | tr 'A-Z' 'a-z')"
+done
 echo "installed into $OUT ($(du -sh "$OUT" | cut -f1))"
