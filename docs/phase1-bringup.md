@@ -139,7 +139,23 @@ The command panels match the original. Town Center: Create Villager, Loom, Feuda
 
 **DirectInput 7** is only for the SideWinder Strategic Commander. 0x41C1B0 loads `dinput.dll` and calls `DirectInputCreateEx(…, 0x700, IID_IDirectInput7A)`. It enumerates devices into 0x41C2C0, which keeps only Microsoft's SideWinder Strategic Commander: VID/PID 0x045E/0x0033, or the product names "Attila", "Tactical Controller" or "Tactical Commander". It releases every other device. The one it keeps gets `c_dfDIJoystick` and scrolls the map (0x5DF089). Keyboard and mouse come from window messages. So leaving `DirectInputCreateEx` unanswered is what a PC without that controller does. Not ported: emulating that controller from a modern gamepad would be a feature of its own.
 
+### 2026-11-18: determinism check (recorded games)
+
+**The game's own oracle.** AoC 1.0 recordings (`.mgx`, "VER 9.4"; `tools/oracle/mgx.py` reads them) carry a sync op about every 1 s of game time. About every 40 s, one has a 28-byte block holding the world's checksums and time. A replay normally ignores them; with `DONTIGNORESYNC` on the command line it compares them (0x426BB0 sets `+0x53C`, "ignore", without it). On a mismatch it stops: "Out of sync replaying game. Replaying stopped. – worldtime: …" (string 9013, raised at 0x5FF53A in 0x5FF180). `AOE2_ARGS` now sets the guest's command line (`main.c`).
+
+**`tools/oracle/replay_check.sh <install> <rec.mgx>`** copies the recording first into the Saved Games list and drives the menus to its replay with `DONTIGNORESYNC`. gdb watches two places: the out-of-sync branch, and the replay's world time (`[this+0x10]` in 0x5FF180) passing the last checksum. Exit 0 means in sync, 1 out of sync, 2 inconclusive. The replay reads its file ahead of play, so the harness does not count block reads; a first version did, and the last-checksum control showed it wrong.
+
+| Recording (made in the native build: Standard Game, 2 computer players, 168 s) | Result |
+|---|---|
+| as recorded | **in sync: 4 of 4 checksums**, past the last one (159 s) with no stop |
+| control: 1st checksum flipped (`mgx.py --corrupt 1`) | stopped at world time 40011 |
+| control: last checksum flipped (`--corrupt 4`) | out of sync at the last checksum |
+
+So the native build is deterministic against itself: a game it records replays to the same world checksums. That covers the simulation, the AI, the random numbers and file I/O on both paths. It does not yet compare the lifted code with the original. That needs a recording made by the original executable; the plan is the original under Wine, and is tracked under Open.
+
+Along the way: a recording's first int (header end) stays 0 until you leave the Achievements screen after a game. That is the original's own sequence: 0x426990 writes 0 at start and 0x426F90 patches it at close. It is not a host bug, but a recording copied before then does not load.
+
 ## Open
 
 - **Real DirectPlay:** Phase 3.
-- **Determinism oracle:** recorded games.
+- **Determinism against the original:** replay recordings made by the original `age2_x1.exe` (under Wine, or from the owner) with `tools/oracle/replay_check.sh`.
