@@ -1,0 +1,103 @@
+diff --git a/runtime/win32hle/ddraw.c b/runtime/win32hle/ddraw.c
+index a5ed04c..a921637 100644
+--- a/runtime/win32hle/ddraw.c
++++ b/runtime/win32hle/ddraw.c
+@@ -648,7 +648,14 @@ static void sf_GetDC(void) {
+     ACCESS();
+     surf_t *s = S(A32(0));
+     TOUCH(s);
+-    if (A32(1)) MEM32(A32(1)) = hle_gdi_surface_dc(s->px, s->w, s->h, s->pitch, s->bpp);
++    if (A32(1)) {
++        uint32_t dc = hle_gdi_surface_dc(s->px, s->w, s->h, s->pitch, s->bpp);
++        /* 8bpp: GDI needs the colours the pixels index: the surface's palette, else
++         * the primary's (an offscreen surface of a palettised display has none) */
++        uint32_t pal = s->palette ? s->palette : g_primary ? g_primary->palette : 0;
++        if (s->bpp == 8 && pal) hle_gdi_dc_set_palette_entries(dc, P(pal)->entries);
++        MEM32(A32(1)) = dc;
++    }
+     RET(DD_OK, 2);
+ }
+ static void sf_GetOverlayPosition(void) { RET(DDERR_UNSUPPORTED, 3); }
+diff --git a/runtime/win32hle/gdidc.c b/runtime/win32hle/gdidc.c
+index db87df8..ec36c5d 100644
+--- a/runtime/win32hle/gdidc.c
++++ b/runtime/win32hle/gdidc.c
+@@ -33,6 +33,7 @@ typedef struct {
+     int bkmode, align, wox, woy, vox, voy, cpx, cpy;
+     int win, is555;                                      /* draws into the window surface; 16bpp is 5-5-5 */
+     const uint32_t *ctab;                                /* an 8bpp DIB's colour table, 0x00RRGGBB */
++    const uint32_t *pe;                                  /* an 8bpp DirectDraw surface's palette, PALETTEENTRY (r, g, b, flags), live */
+     uint32_t bmp;                                        /* the bitmap selected into it */
+     int clip, cl, ct, cr, cb;                            /* SelectClipRgn's rectangle, in pixels */
+ } dc_t;
+@@ -66,6 +67,10 @@ uint32_t hle_gdi_surface_dc(uint8_t *px, int w, int h, int pitch, int bpp) {
+     return d;
+ }
+ void hle_gdi_release_dc(uint32_t h) { dc_t *x = DC(h); if (x) x->used = 0; }
++/* An 8bpp surface DC's colours: the DirectDraw palette its pixels index (ddraw.c's
++ * GetDC passes the surface's own, or the primary's). Kept as a pointer, so the
++ * palette's SetEntries reach text drawn after them. */
++void hle_gdi_dc_set_palette_entries(uint32_t h, const uint32_t *pe) { dc_t *x = DC(h); if (x) x->pe = pe; }
+ 
+ /* The window surface: the pixels a GDI game's window DCs (GetDC, BeginPaint)
+  * draw into, set by the host at the display mode's size. There is one, for
+@@ -647,8 +652,25 @@ static void g_GetTextMetricsA(void) {                    /* TEXTMETRICA */
+     RET(1, 2);
+ }
+ 
++/* 8bpp: the palette index nearest to an RGB, as GDI maps a COLORREF on a palettised
++ * surface. PALETTEINDEX(i) (0x01000000 | i) is the index itself. */
++static uint32_t nearest_index(const dc_t *d, uint32_t r, uint32_t g, uint32_t b) {
++    uint32_t best = 0, bestd = ~0u;
++    for (uint32_t i = 0; i < 256; i++) {
++        uint32_t pr, pg, pb;
++        if (d->pe) pr = d->pe[i] & 0xFF, pg = (d->pe[i] >> 8) & 0xFF, pb = (d->pe[i] >> 16) & 0xFF;
++        else if (d->ctab) pr = (d->ctab[i] >> 16) & 0xFF, pg = (d->ctab[i] >> 8) & 0xFF, pb = d->ctab[i] & 0xFF;
++        else pr = pg = pb = i;                           /* no palette known: a grey ramp */
++        int dr = (int)pr - (int)r, dg = (int)pg - (int)g, db = (int)pb - (int)b;
++        uint32_t dist = (uint32_t)(dr * dr + dg * dg + db * db);
++        if (dist < bestd) bestd = dist, best = i;
++        if (!dist) break;
++    }
++    return best;
++}
+ static uint32_t pack(const dc_t *d, uint32_t cr) {       /* COLORREF 0x00BBGGRR -> the surface's pixel */
+     uint32_t r = cr & 0xFF, g = (cr >> 8) & 0xFF, b = (cr >> 16) & 0xFF;
++    if (d->bpp == 8) return (cr >> 24) == 1 ? cr & 0xFF : nearest_index(d, r, g, b);
+     if (d->bpp == 16) return d->is555 ? (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3) : (r >> 3) << 11 | (g >> 2) << 5 | (b >> 3);
+     return r << 16 | g << 8 | b;
+ }
+@@ -754,7 +776,7 @@ static uint8_t *text_ink(const font_t *f, TTF_Font *t, const char *buf, int n, i
+ static void g_TextOutA(void) {                           /* (hdc, x, y, text, n) */
+     dc_t *d = DC(A32(0));
+     int n = (int)A32(4);
+-    if (!d || !d->px || n <= 0 || (d->bpp != 16 && d->bpp != 32)) RET(1, 5);
++    if (!d || !d->px || n <= 0 || (d->bpp != 8 && d->bpp != 16 && d->bpp != 32)) RET(1, 5);
+     font_t *f = FONT(d->font);
+     TTF_Font *t = ttf_of(f);
+     if (!t) RET(1, 5);
+@@ -781,7 +803,11 @@ static void g_TextOutA(void) {                           /* (hdc, x, y, text, n)
+         for (int i = 0; i < iw; i++) {
+             int px = x + i, a = ink[j * iw + i];
+             if (px < 0 || px >= d->w) continue;
+-            if (d->bkmode == OPAQUE) put(d, px, py, mix(d, bg, fg, a));
++            if (d->bpp == 8) {                           /* palettised: no blending, as GDI draws there */
++                if (a >= 128) put(d, px, py, fg);
++                else if (d->bkmode == OPAQUE) put(d, px, py, bg);
++            }
++            else if (d->bkmode == OPAQUE) put(d, px, py, mix(d, bg, fg, a));
+             else if (a) put(d, px, py, mix(d, get(d, px, py), fg, a));
+         }
+     }
+diff --git a/runtime/win32hle/win32hle.h b/runtime/win32hle/win32hle.h
+index 240ed24..3c583ee 100644
+--- a/runtime/win32hle/win32hle.h
++++ b/runtime/win32hle/win32hle.h
+@@ -299,6 +299,7 @@ extern const win32hle_shim win32hle_module[];         /* modules, resources, cur
+ extern const win32hle_shim win32hle_gdi32[];
+ extern const win32hle_shim win32hle_gdidc[];          /* DCs, fonts, text (SDL2_ttf) */
+ uint32_t hle_gdi_surface_dc(uint8_t *px, int w, int h, int pitch, int bpp);   /* a DC drawing into those pixels */
++void     hle_gdi_dc_set_palette_entries(uint32_t hdc, const uint32_t *pe);    /* 8bpp: its DirectDraw palette (live) */
+ /* A GDI game's screen: the pixels its window DCs (GetDC, BeginPaint) draw
+  * into, at the display mode's size; screen.c shows them when there is no
+  * DirectDraw primary. seq changes when they may have. */
