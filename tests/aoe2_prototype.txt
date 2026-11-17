@@ -1,0 +1,23 @@
+# Phase 0 prototype: leaf functions of age2_x1.exe (sha256 29341dbe...), chosen by tools/lift/pick_leaves.py
+# VA          kind      bytes  insns
+0x0040bdf0  x87          43     16
+0x00494bc0  x87          46     15
+0x004b2c70  x87         181     54
+0x0055a990  x87          68     20
+0x005e8590  x87          73     19
+0x0040a720  string       84     35
+0x004aa100  string       85     32
+0x00531f60  string       64     21
+0x0040ee00  loop         89     30
+0x004a04f0  loop         26     12
+0x00593860  loop         42     14
+0x00425bc0  mul/div     449    148
+0x00576680  mul/div      23      7
+0x005eca20  mul/div     211     58
+0x004067f0  bitwise      16      8
+0x00487e80  bitwise      83     24
+0x005a8d20  bitwise      32     12
+0x00405dd0  plain        25      6
+0x00478b80  plain        25      8
+0x005792c0  plain        67     24
+# pool sizes: x87 93, string 71, loop 231, mul/div 49, bitwise 300, plain 190
