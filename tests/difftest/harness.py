@@ -78,17 +78,24 @@ def x87_shape(insns) -> tuple[int, int]:
     their arguments, and to avoid pre-loading a value when the function uses all eight
     registers itself: QEMU does not model x87 stack overflow/underflow, so such inputs
     would compare garbage with garbage."""
+    # Arguments: only pops *before the first push* count. A linear walk over branches and
+    # loops undercounts depth later on (every `fstp st(0)` of every path adds up), so a
+    # minimum taken over the whole body would invent arguments (0x57A060 showed "7").
     d = lo = hi = 0
+    pushed = False
     for i in insns:
         m = i.mnemonic
         if m in X87_PUSH:
             d += 1
+            pushed = True
         elif m in X87_POP2:
             d -= 2
-        elif m in X87_POP1 or (m.startswith("f") and m.endswith("p") and m not in ("fsetpm",)):
+        elif m in X87_POP1 or (m.startswith("f") and m.endswith("p") and m not in ("fsetpm", "fnop")):
             d -= 1
-        lo, hi = min(lo, d), max(hi, d)
-    return -lo, hi
+        if not pushed:
+            lo = min(lo, d)
+        hi = max(hi, d)
+    return min(-lo, 2), hi
 
 
 # ----------------------------------------------------------------------------- inputs
@@ -435,10 +442,17 @@ def compare(want: Result, got: Result, mnems: set[str] = frozenset(), known: dic
     if want.status != "ok":
         return []
     diffs = []
+    def f32_nan(x):
+        return (x & 0x7F800000) == 0x7F800000 and x & 0x007FFFFF
     for n, a, b in zip(REGS, want.regs, got.regs):
         if a != b:
             if "fnstsw" in mnems and (a ^ b) & ~0x3800 == 0:
                 known["fnstsw-top"] = known.get("fnstsw-top", 0) + 1
+                continue
+            if f32_nan(a) and f32_nan(b) and mnems & {"fstp", "fst"}:
+                # float bits moved through an integer register (`fstp [esp]; mov edx, [esp]`):
+                # the same NaN-payload divergence as in memory, see nan_word
+                known["nan-payload"] = known.get("nan-payload", 0) + 1
                 continue
             diffs.append(f"{n}: cpu {a:08X} lifted {b:08X}")
     if len(want.st) != len(got.st):
@@ -506,5 +520,5 @@ def difftest(img: Image, gen: Path, va: int, body_range: tuple[int, int], ncases
         else:
             refused += 1
     if NAN_PAYLOAD_DIFFS - nan0:
-        known["nan-payload"] = NAN_PAYLOAD_DIFFS - nan0
+        known["nan-payload"] = known.get("nan-payload", 0) + NAN_PAYLOAD_DIFFS - nan0
     return Verdict(va, ncases, both_ok, refused, fails, known)
