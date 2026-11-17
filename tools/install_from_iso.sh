@@ -64,4 +64,6 @@ dd if="$AOC_ISO" bs=1 skip=$((0x8028)) count=32 2>/dev/null | tr -d ' \000' > "$
 for f in EULAX.RTF READMEX.RTF; do
   [[ -f "$WORK/aoc/$f" ]] && cp -f "$WORK/aoc/$f" "$OUT/$(echo "$f" | tr 'A-Z' 'a-z')"
 done
+# The cinematics, as MPEG-1 copies the native host can play (ADR-0004)
+bash "$(dirname "$0")/transcode_videos.sh" "$OUT"
 echo "installed into $OUT ($(du -sh "$OUT" | cut -f1))"

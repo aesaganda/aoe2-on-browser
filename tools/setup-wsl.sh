@@ -3,6 +3,7 @@
 #   - Python venv with pefile / LIEF / unicorn / capstone / pytest
 #   - Ghidra (official NSA GitHub release) for headless analysis
 # System packages (needs root):  build-essential python3-venv openjdk-21-jdk-headless unzip curl xvfb
+#   native build and install:   libsdl2-dev libsdl2-ttf-dev zlib1g-dev p7zip-full cabextract ffmpeg (ADR-0004)
 set -euo pipefail
 
 TOOLS_HOME="${AOE2R_TOOLS:-$HOME/.local/share/aoe2-recomp}"
