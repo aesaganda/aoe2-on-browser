@@ -80,6 +80,18 @@ The game shows Microsoft's EULA through `EBUEulaX.dll` and exits unless the play
 - it returns "accepted" only when `AOE2_ACCEPT_EULA=1` is set;
 - otherwise it points to `EULAX.RTF` on the Conquerors disc, and the game quits just as it does when the dialog is declined.
 
+### 2026-11-17: towards a game
+
+Tool: `tools/native/session.sh` keeps a game session alive under Xvfb (`start … --hold`) and drives it step by step (`click` in game coordinates, `type`, `key`, `shot`).
+
+| Step | Result | Fix |
+|---|---|---|
+| New Player | Typed text reaches win32hle's EDIT control (EN_CHANGE, GetWindowTextA) and the profile is created, but the text is **not drawn while typing** | Open |
+| Single Player | "You must insert the … Conquerors Expansion CD". The game's own disc check: registry `CDPath` → `GetDriveTypeA` == CDROM → `GetVolumeInformationA` label | `src/linux/cdrom.c` presents the owner's disc image as D: (contents in `<root>/cdrom`, label `AGE2_X1` read from the image's ISO 9660 descriptor). This is the equivalent of mounting the image; nothing in the game is patched |
+| Standard Game | Setup screen correct: Random Map, Coastal, 2 AI players | – |
+| Start Game 1 | Miss 0x0060739E: a hand-written **inflate** routine (0x606xxx–0x607xxx, deflate table sizes 288/32/19) dispatches through `jmp dword ptr cs:[reg*4 + table]` | Lift seeds now include targets of `jmp/call [reg*4 + table]` in code. Segment-prefixed operands are always scanned, because pcrecomp's table recogniser misses the `cs:` prefix (to report upstream). Lift: 12,459 entries, 0 errors |
+| Start Game 2 | **The process exits silently**: no dispatch miss, no unimplemented import, nothing in the log. Most likely a host signal (SIGSEGV) | Next: a crash handler that prints the guest EIP and pcrecomp's enter-trace, or run under gdb |
+
 ## Open
 
 - **SEH/C++ EH dispatch:** win32hle ends the run on `RaiseException`. The frame registry is in place; the guest-chain walk is not.
