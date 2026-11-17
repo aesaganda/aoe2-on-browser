@@ -93,11 +93,7 @@ static void g_mciSendCommandA(void) {                        /* (device, msg, fl
     RET(A32(1) == 0x803 /* MCI_OPEN */ ? 256 + 50 /* MCIERR_DEVICE_NOT_INSTALLED */ : 0, 4);
 }
 
-/* ---- DPLAYX: Phase 3. Single-player needs only a clean "unavailable". ---- */
-#define DPERR_UNAVAILABLE 0x887704B0u
-static void g_DirectPlayCreate(void)       { RET(DPERR_UNAVAILABLE, 3); }
-static void g_DirectPlayEnumerateA(void)   { RET(0, 2); }    /* DP_OK, no providers listed */
-static void g_DirectPlayLobbyCreateA(void) { RET(DPERR_UNAVAILABLE, 5); }
+/* DPLAYX: see dplay_stub.c (the start-up DirectX check needs a working object). */
 
 static const win32hle_shim gaps[] = {
     { "IsDBCSLeadByte", g_IsDBCSLeadByte },   { "GetPriorityClass", g_GetPriorityClass },
@@ -110,9 +106,6 @@ static const win32hle_shim gaps[] = {
     { "ImmGetOpenStatus", g_ImmGetOpenStatus }, { "ImmGetDefaultIMEWnd", g_ImmGetDefaultIMEWnd },
     { "ICInfo", g_ICInfo }, { "MCIWndCreateA", g_MCIWndCreateA },
     { "mciSendCommandA", g_mciSendCommandA },
-    { "dplayx.dll#1", g_DirectPlayCreate }, { "DirectPlayCreate", g_DirectPlayCreate },
-    { "dplayx.dll#2", g_DirectPlayEnumerateA }, { "DirectPlayEnumerateA", g_DirectPlayEnumerateA },
-    { "dplayx.dll#4", g_DirectPlayLobbyCreateA }, { "DirectPlayLobbyCreateA", g_DirectPlayLobbyCreateA },
     { NULL, NULL },
 };
 
