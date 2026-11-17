@@ -18,6 +18,7 @@
 #include "win32hle.h"
 
 void aoc_shims_register(void);     /* aoc_shims.c */
+void win32_gaps_register(void);    /* win32_gaps.c */
 
 #define HKLM 0x80000002u
 #define AOC_KEY "Software\\Microsoft\\Microsoft Games\\Age of Empires II: The Conquerors Expansion\\1.0"
@@ -43,8 +44,13 @@ int main(int argc, char **argv) {
     if (access(exe, R_OK) != 0) { perror(exe); return 66; }
 
     hle_set_drive('C', root);
+    /* The AoC shortcut starts age2_x1\age2_x1.exe with the install root as the
+     * working directory: language_x1.dll and data\ are found relative to it.
+     * win32hle's current directory is the host's. */
+    if (chdir(root) != 0) { perror(root); return 66; }
     aoc_shims_register();           /* first: same-named shims registered earlier win */
     recomp_host_init();
+    win32_gaps_register();          /* last: fills only what win32hle does not answer */
     seed_registry();
     if (recomp_host_boot_permissive(exe) != 0) {
         fprintf(stderr, "boot failed: %s\n", exe);
