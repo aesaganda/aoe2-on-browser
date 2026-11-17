@@ -132,9 +132,10 @@ Tools added for this step:
 
 The command panels match the original. Town Center: Create Villager, Loom, Feudal Age, Ungarrison, Town Bell. Villager: Build Economic, Build Military, Repair, Garrison.
 
+**Exceptions.** AoC never throws. Its only `RaiseException` is the CRT's floating-point path, and all 13 catch/except landing pads are in the CRT. So guest exception dispatch is not ported; see ADR-0003.
+
 ## Open
 
-- **SEH/C++ EH dispatch:** win32hle ends the run on `RaiseException`. The frame registry is in place; the guest-chain walk is not.
 - **DirectInput 7** (`DirectInputCreateEx`): win32hle has DirectInput 3/5 devices, but not the v7 entry point.
 - **MCIWnd:** AVI cinematics.
 - **Real DirectPlay:** Phase 3.

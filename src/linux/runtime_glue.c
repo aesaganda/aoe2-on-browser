@@ -6,7 +6,7 @@
  * This is the bookkeeping half of pcrecomp's native32/eh32.c (same semantics,
  * thread-local list, newest first). The dispatch half (RaiseException walking
  * the guest's SEH chain, _CxxThrowException, catch funclets) is not here yet:
- * win32hle ends the run on RaiseException. Tracked in docs/phase1-bringup.md. */
+ * win32hle ends the run on RaiseException. AoC never raises (docs/adr/0003). */
 #include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>
