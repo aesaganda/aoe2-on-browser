@@ -1,0 +1,6 @@
+pefile>=2024.8.26
+lief>=0.15
+unicorn>=2.1
+capstone>=5.0
+pytest>=8
+pytest-xdist>=3
