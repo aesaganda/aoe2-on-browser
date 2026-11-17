@@ -1,0 +1,8 @@
+# Lifted functions replaced by host implementations (HLE). For each VA the lift
+# renames `void sub_XXXXXXXX(void)` to `sub_XXXXXXXX_lifted`, so the host's function
+# of the original name takes every direct call and the dispatch table entry.
+#
+# VA          implemented in            why
+0x006074CB    src/linux/aoc_inflate.c   hand-written resumable inflate whose coroutine copies
+                                        the guest stack (return addresses included) out and back
+                                        in (0x606E0D/0x606E5D): not expressible as lifted C calls

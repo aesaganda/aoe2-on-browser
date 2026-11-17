@@ -128,6 +128,26 @@ def dispatch_table_targets(md, mem, base, code, wanted, owned=lambda a: False) -
     return out
 
 
+def apply_overrides(gen: Path, listing: Path) -> None:
+    """Rename the lifted bodies listed in overrides.txt to sub_XXXXXXXX_lifted: the host's
+    HLE function of the original name then takes their calls (see overrides.txt)."""
+    import re
+    if not listing.exists():
+        return
+    vas = [int(l.split()[0], 16) for l in listing.read_text().splitlines()
+           if l.strip() and not l.lstrip().startswith("#") and l.split()[0].startswith("0x")]
+    for va in vas:
+        name = f"sub_{va:08X}"
+        hit = False
+        for f in gen.glob("recomp_*.c"):
+            text = f.read_text()
+            new, n = re.subn(rf"^void {name}\(void\) \{{", f"void {name}_lifted(void) {{", text, flags=re.M)
+            if n:
+                f.write_text(new)
+                hit = True
+        print(f"override {name}: {'renamed to ' + name + '_lifted' if hit else 'NOT FOUND in the lift'}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("exe")
@@ -154,6 +174,7 @@ def main():
     # lift_image leaves the header and the dispatch table to the caller (one table may span
     # several modules); with one module we write both here, in generate.py's format.
     out = Path(a.out)
+    apply_overrides(out, ROOT / "tools" / "lift" / "overrides.txt")
     with open(out / "recomp_funcs.h", "w") as f:
         f.write("#pragma once\n#include <stdint.h>\n\n")
         f.write("".join(f"void sub_{va:08X}(void);\n" for va in entries))
