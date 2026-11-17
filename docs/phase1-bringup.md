@@ -137,8 +137,9 @@ The command panels match the original. Town Center: Create Villager, Loom, Feuda
 
 **Cinematics** (ADR-0004). The game asks `ICInfo('vidc','iv50')` at start-up and turns its videos off without Indeo 5. The four AVIs are Indeo 5, 320×240 at 15 fps, with PCM sound. Install-time MPEG-1 copies are played by `src/linux/mciwnd.c` (pl_mpeg). The MCIWnd is a win32hle child window with a host window procedure; the game subclasses it, sends MCI_PLAY and polls `MCIWNDM_GETMODEA` for "stopped". The game switches to 640×480×16 for videos and doubles the window. Frames are painted in true colour by patch 0004's `hle_screen_rgb_hook`, and sound is a win32hle audio stream. Checked: Microsoft logo → Ensemble logo → intro → main menu, and a click skips. The `disk` driver recorded the logo's sound (signal in 166 of 182 tenth-second windows).
 
+**DirectInput 7** is only for the SideWinder Strategic Commander. 0x41C1B0 loads `dinput.dll` and calls `DirectInputCreateEx(…, 0x700, IID_IDirectInput7A)`. It enumerates devices into 0x41C2C0, which keeps only Microsoft's SideWinder Strategic Commander: VID/PID 0x045E/0x0033, or the product names "Attila", "Tactical Controller" or "Tactical Commander". It releases every other device. The one it keeps gets `c_dfDIJoystick` and scrolls the map (0x5DF089). Keyboard and mouse come from window messages. So leaving `DirectInputCreateEx` unanswered is what a PC without that controller does. Not ported: emulating that controller from a modern gamepad would be a feature of its own.
+
 ## Open
 
-- **DirectInput 7** (`DirectInputCreateEx`): win32hle has DirectInput 3/5 devices, but not the v7 entry point.
 - **Real DirectPlay:** Phase 3.
 - **Determinism oracle:** recorded games.
