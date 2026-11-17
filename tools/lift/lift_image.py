@@ -23,6 +23,56 @@ for d in ("lift", "pe", "disasm"):
 from drive32 import lift_image  # noqa: E402
 
 
+def data_pointer_seeds(exe: str, funcs: list) -> list[int]:
+    """Aligned dwords in data sections that point into code no catalogued function owns.
+
+    Ghidra leaves 18% of age2_x1's code bytes outside any function: code reached only
+    through pointers (C++ static initialisers in the CRT's __xc_a table, vtables,
+    callbacks). Each such pointer becomes a lift entry. Pointers into the *middle* of
+    a known body are skipped: those are switch-table arms, which the body handles."""
+    import bisect
+    import struct
+
+    import pefile
+    pe = pefile.PE(exe, fast_load=True)
+    base = pe.OPTIONAL_HEADER.ImageBase
+    code = [(base + s.VirtualAddress, base + s.VirtualAddress + s.Misc_VirtualSize)
+            for s in pe.sections if s.Characteristics & 0x20000000]
+    entries = {int(f["entry"], 16) for f in funcs}
+    bodies = sorted((int(lo, 16), int(hi, 16)) for f in funcs for lo, hi in f["ranges"])
+    starts = [lo for lo, _ in bodies]
+
+    def inside(a):
+        i = bisect.bisect_right(starts, a) - 1
+        return i >= 0 and bodies[i][0] < a <= bodies[i][1]
+    def wanted(v):
+        return v not in entries and any(lo <= v < hi for lo, hi in code) and not inside(v)
+    seeds = set()
+    for s in pe.sections:
+        if s.Characteristics & 0x20000000 or not s.SizeOfRawData:
+            continue
+        data = s.get_data()
+        for o in range(0, len(data) - 3, 4):
+            v = struct.unpack_from("<I", data, o)[0]
+            if wanted(v):
+                seeds.add(v)
+    # Code addresses held as immediates in code: `push offset fn` before _atexit,
+    # RegisterClass's WndProc, enumeration callbacks, qsort comparators.
+    import capstone
+    from capstone import x86 as X
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+    md.detail = True
+    mem = pe.get_memory_mapped_image()
+    for lo, hi in bodies:
+        for ins in md.disasm(bytes(mem[lo - base:hi + 1 - base]), lo):
+            if ins.mnemonic.startswith(("j", "call", "loop")):
+                continue                      # branch targets are the driver's job
+            for op in ins.operands:
+                if op.type == X.X86_OP_IMM and wanted(op.imm & 0xFFFFFFFF):
+                    seeds.add(op.imm & 0xFFFFFFFF)
+    return sorted(seeds)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("exe")
@@ -30,6 +80,7 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--stats")
     ap.add_argument("--only", help="comma-separated VAs: lift just these (prototype mode)")
+    ap.add_argument("--no-data-seeds", action="store_true", help="do not add code pointers found in data as entries")
     a = ap.parse_args()
 
     g = json.loads(Path(a.ghidra_json).read_text())
@@ -41,8 +92,10 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(a.out)) or ".", exist_ok=True)
     catf = Path(a.out).with_suffix(".catalog.json")
     catf.write_text(json.dumps(cat))
+    seeds = [] if (a.only or a.no_data_seeds) else data_pointer_seeds(a.exe, funcs)
     t = time.time()
-    stats, entries = lift_image(a.exe, str(catf), a.out, log=lambda *x: print(*x, flush=True))
+    stats, entries = lift_image(a.exe, str(catf), a.out, seeds=seeds, log=lambda *x: print(*x, flush=True))
+    stats["data_seeds"] = len(seeds)
     # lift_image leaves the header and the dispatch table to the caller (one table may span
     # several modules); with one module we write both here, in generate.py's format.
     out = Path(a.out)
