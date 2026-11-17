@@ -31,7 +31,7 @@ NOTES: dict[str, tuple[str, str]] = {
     "mixerGetLineInfoA": (M, "Describe a fake line"),
     "mixerGetLineControlsA": (M, "Describe a fake volume control"),
     "mixerGetControlDetailsA": (M, "Read volume from host state"),
-    "mixerSetControlDetailsA": (M, "Write volume to host audio gain"),
+    "mixerSetControlDetails": (M, "Write volume to host audio gain (no A/W variant: exported undecorated)"),
     # ---------------- KERNEL32: memory
     "GlobalAlloc": (T, "Guest heap allocation"), "GlobalFree": (T, "Guest heap free"),
     "GlobalLock": (T, "Return pointer (fixed memory)"), "GlobalUnlock": (T, "No-op"),

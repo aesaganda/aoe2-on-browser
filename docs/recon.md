@@ -100,7 +100,7 @@ Rich header:
 |---|---|---|---|---|---|
 | `VERSION.dll` | 3 | 2 | 1 | 0 | 0 |
 | `MSVFW32.dll` | 2 | 1 | 0 | 1 | 0 |
-| `WINMM.dll` | 12 | 6 | 4 | 1 | 1 |
+| `WINMM.dll` | 12 | 6 | 5 | 1 | 0 |
 | `KERNEL32.dll` | 110 | 79 | 28 | 3 | 0 |
 | `USER32.dll` | 76 | 56 | 19 | 1 | 0 |
 | `GDI32.dll` | 28 | 19 | 7 | 2 | 0 |
@@ -111,7 +111,7 @@ Rich header:
 | `ADVAPI32.dll` | 4 | 1 | 3 | 0 | 0 |
 | `ole32.dll` | 4 | 3 | 0 | 1 | 0 |
 | `WSOCK32.dll` | 4 | 3 | 1 | 0 | 0 |
-| **total** | 255 | 177 | 64 | 13 | 1 |
+| **total** | 255 | 177 | 65 | 13 | 0 |
 
 Ordinal imports resolve as follows (ordinals from Wine's `.spec` files): `DPLAYX#1` DirectPlayCreate, `#2` DirectPlayEnumerateA, `#4` DirectPlayLobbyCreateA; `DSOUND#1` DirectSoundCreate.
 
@@ -244,6 +244,7 @@ Reference counts below are instructions that touch the import's IAT slot (`call 
 - **Registry:** `RegCloseKey` x5, `RegCreateKeyExA` x7, `RegQueryValueExA` x6, `RegSetValueExA` x4.
   Registry paths in strings: `Software\Microsoft\Microsoft Games\Age of Empires II: The Conquerors Expansion\1.0`, `Software\Microsoft\Microsoft Games\Age of Empires II: The Conquerors Expansion\1.0\EULA`, `Software\Microsoft\Microsoft Games\Age of Empires\2.0`
 - **MCI / mixer / video:** `ICInfo` x1, `MCIWndCreateA` x1, `mciGetErrorStringA` x2, `mciSendCommandA` x12, `mixerOpen` x2, `mixerSetControlDetails` x2.
+- **x87 transcendental / rounding instructions** (hardware approximations differ from libm, which matters for determinism): `fcos` x4, `fpatan` x3, `fprem` x4, `frndint` x1, `fscale` x2, `fsin` x4.
   Media-related strings: `%s%.2d*.mp3`, `%s%s.avi`, `%s*.mp3`, `%sgame\avi\%s.avi`, `%smusic%d.mid`, `.avi`, `.mid`, `.mp3`, `.wav`, `archupg.wav`, `artheld.wav`, `artlost.wav`, `atakwarn.wav`, `athiesm.wav`, `button1.wav`, `button2.wav`, `button3.wav`, `button4.wav`, `button5.wav`, `button6.wav`, `button7.wav`, `button8.wav`, `button9.wav`, `buy.wav`, `cantdo.wav`, `capgaia.wav`, `capsheep.wav`, `chatrcvd.wav`, `convdone.wav`, `convwarn.wav` ...
 - **Networking (besides DirectPlay):** `WSACleanup` x1, `WSAStartup` x1, `gethostbyname` x2, `gethostname` x1.
 

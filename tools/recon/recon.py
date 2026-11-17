@@ -744,6 +744,10 @@ def main():
     reg_keys = sorted(set(s for _, s in strings(img) if re.search(r"(?i)^(software|system)\\|\\microsoft\\games|^HKEY", s)))
     w(f"  Registry paths in strings: {', '.join('`'+s+'`' for s in reg_keys[:12]) or 'none'}")
     w(f"- **MCI / mixer / video:** {refcount({'mciSendCommandA', 'mciGetErrorStringA', 'mixerOpen', 'mixerSetControlDetails', 'MCIWndCreateA', 'ICInfo'})}.")
+    fpu_names = {"fsin", "fcos", "fsincos", "fpatan", "fptan", "f2xm1", "fyl2x", "fyl2xp1", "fprem", "fprem1", "fscale", "frndint"}
+    tr = collections.Counter(i.mnem for insns in funcs.values() for i in insns if i.mnem in fpu_names)
+    w(f"- **x87 transcendental / rounding instructions** (hardware approximations differ from libm, which matters for determinism): "
+      + (", ".join(f"`{k}` x{v}" for k, v in sorted(tr.items())) or "none") + ".")
     media = sorted(set(s for _, s in strings(img) if re.search(r"(?i)(cdaudio|sequencer|waveaudio|avivideo|mpegvideo|\.mid\b|\.avi\b|\.mp3\b|\.wav\b|\.mmm\b)", s) and len(s) < 80))
     w(f"  Media-related strings: {', '.join('`'+s+'`' for s in media[:30])}{' ...' if len(media) > 30 else ''}")
     w(f"- **Networking (besides DirectPlay):** {refcount({'WSAStartup', 'gethostname', 'gethostbyname', 'WSACleanup'})}.")
