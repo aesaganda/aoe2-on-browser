@@ -92,7 +92,33 @@ Tool: `tools/native/session.sh` keeps a game session alive under Xvfb (`start �
 | Start Game 1 | Miss 0x0060739E: a hand-written **inflate** routine (0x606xxx–0x607xxx, deflate table sizes 288/32/19) dispatches through `jmp dword ptr cs:[reg*4 + table]` | Lift seeds now include targets of `jmp/call [reg*4 + table]` in code. Segment-prefixed operands are always scanned, because pcrecomp's table recogniser misses the `cs:` prefix (to report upstream). Lift: 12,459 entries, 0 errors |
 | Start Game 2 | **The process exits silently**: no dispatch miss, no unimplemented import, nothing in the log. Most likely a host signal (SIGSEGV) | Next: a crash handler that prints the guest EIP and pcrecomp's enter-trace, or run under gdb |
 
+### 2026-11-17: in game
+
+**D: failed.** While this step was being built, the drive holding the repo (Kioxia Exceria SSD) failed. Windows logged Ntfs 50 "Delayed Write Failed … data has been lost" and disk 51 paging errors, writes stopped and reads started to fail. The repo was cloned read-only, all 37 commits with a clean `git fsck`, into WSL's own disk (`~/aoe2-recomp-backup`), where work continues. The uncommitted work lost on D: was written again. The old remote is renamed `d-drive-failing`.
+
+`tools/native/session.sh`:
+- `AOE2_GDB=1` runs the game under gdb, which prints the host backtrace (lifted `sub_XXXXXXXX` frames), the guest registers and `g_cur_func` on a fatal signal;
+- `to-game` clicks from the main menu to Start Game.
+
+| Step | Result | Fix |
+|---|---|---|
+| Start Game 2 (gdb) | SIGSEGV in `sub_006070A6` at 0x6070FB `mov edi, [esi+0x8200]` with `esi = 8`, inside the hand-written inflate called from the compressed-file reader 0x004C5A20 | – |
+| Diagnosis | The inflate is a **stack-copying coroutine**. When its window is full, 0x606E0D saves the registers, pops the guest stack down to its entry frame (return addresses included) into its state and `jmp`s on. The next call, 0x606E5D, pushes it back and resumes mid-call-chain. Its "done" exit (0x60702D → `jmp 0x60756F`) pops the outer function's frame from deep inside. In lifted code each guest function is a C function, so these exits return only from the innermost C frame, and the caller resumes with garbage registers | Not liftable as-is |
+| Fix | HLE: `src/linux/aoc_inflate.c` replaces 0x006074CB (`inflate_step(in, in_off, &in_len, out, out_off, &out_len, state, flag)`, cdecl; `state+0xA958 == 0` starts a stream; returns the consumed and produced counts) with zlib raw inflate (`-15`). It is general: `tools/lift/overrides.txt` lists VAs whose lifted body is renamed `sub_X_lifted`, so the host's `sub_X` takes the direct calls and the dispatch entry. The binary links `-lz` | – |
+| Start Game 3 | **A random-map game runs.** Town Center, villagers, resource bar (200/200/100/200), population 3/5, Dark Age, Celts. Selecting the Town Center and pressing `C` queues a villager: food 200 → 150, "Creating – 9%", and about 35 s later a fourth villager walks out (4/5) | – |
+
+So the simulation, its timer, keyboard and mouse input in game, and sprite/terrain/UI drawing all work in the lifted build.
+
+Also: lift + full native build on WSL's ext4 takes 2 min 24 s, much faster than over drvfs.
+
+Seen but not fixed:
+- the **minimap stays black**;
+- **typed text does not show** in the New Player edit box (it reaches the control: the profile gets the name);
+- the Town Center command panel shows some odd icons (to be checked against the original).
+
 ## Open
+
+- **Minimap black**; **edit-box text not drawn**; command-panel icons to check.
 
 - **SEH/C++ EH dispatch:** win32hle ends the run on `RaiseException`. The frame registry is in place; the guest-chain walk is not.
 - **DirectInput 7** (`DirectInputCreateEx`): win32hle has DirectInput 3/5 devices, but not the v7 entry point.
