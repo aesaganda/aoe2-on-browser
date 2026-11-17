@@ -33,8 +33,17 @@ case "${1:-}" in
     Xvfb "$DISP" -screen 0 1600x1200x24 >/dev/null 2>&1 & echo $! > "$DIR/xvfb.pid"
     sleep 1
     rm -f "$DIR/geom"
+    # AOE2_GDB=1: under gdb, which on a fatal signal prints the host backtrace (the
+    # lifted sub_XXXXXXXX frames), the guest registers and the guest function running.
+    RUN=("$BIN" "$2")
+    if [[ "${AOE2_GDB:-0}" == 1 ]]; then
+      RUN=(gdb -q -batch -ex "handle SIGALRM SIGPIPE SIGUSR1 SIGUSR2 nostop noprint pass"
+           -ex run -ex "bt 25"
+           -ex 'printf "guest: cur_func %08x eax %08x ecx %08x edx %08x ebx %08x esp %08x ebp %08x esi %08x edi %08x\n", g_cur_func, g_eax, g_ecx, g_edx, g_ebx, g_esp, g_ebp, g_esi, g_edi'
+           -ex "info registers rip" --args "${RUN[@]}")
+    fi
     ( cd / && DISPLAY="$DISP" SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}" \
-        "$BIN" "$2" > "$DIR/game.log" 2>&1 & echo $! > "$DIR/game.pid" )
+        "${RUN[@]}" > "$DIR/game.log" 2>&1 & echo $! > "$DIR/game.pid" )
     echo "started (display $DISP)"
     # WSL ends a session's processes with the command that started them: with --hold,
     # stay until the game exits (run this in the background, drive it from elsewhere).
@@ -53,6 +62,13 @@ case "${1:-}" in
     DISPLAY="$DISP" xdotool type --delay 80 "$2" && echo "typed";;
   key)
     DISPLAY="$DISP" xdotool key "$2" && echo "key $2";;
+  to-game)
+    # main menu -> Single Player -> (first run: New Player "Player") -> Standard Game -> Start Game
+    S="$0"
+    bash "$S" click 370 25; sleep 4
+    bash "$S" click 423 298; bash "$S" type Player; sleep 1; bash "$S" click 325 353; sleep 5
+    bash "$S" click 608 173; sleep 5
+    bash "$S" click 119 569;;
   log)
     tail -n "${2:-20}" "$DIR/game.log";;
   alive)
