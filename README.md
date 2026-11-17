@@ -9,7 +9,9 @@ The Definitive Edition is out of scope.
 
 ## Status
 
-**Phase 0: recon and lifter prototype.** See `docs/phase0-report.md` once it exists.
+**Phase 0 is done.** The verdict is GO for Phase 1; see `docs/phase0-report.md`.
+
+The lifter is [pcrecomp](https://github.com/sp00nznet/pcrecomp) (MIT), pinned as a submodule (ADR-0001). Clone with `--recursive`, or run `git submodule update --init`.
 
 | Phase | Content |
 |---|---|
@@ -30,7 +32,9 @@ data, and nothing generated from the game's code (ADR-0002). Put your
 sudo apt install build-essential python3-venv openjdk-25-jdk-headless mingw-w64 gcc-multilib unzip curl
 make setup      # Python venv (pefile, LIEF, unicorn, capstone, pytest) + Ghidra
 make docs       # Ghidra headless analysis + PE recon -> docs/
-make test       # differential tests
+make lift       # whole-image lift with pcrecomp -> build/lift/gen
+make test       # pcrecomp self-test + synthetic PE + AoE2 prototype differential tests
+make sweep      # differential test over every leaf function (~13 min)
 ```
 
 From Windows: `wsl -d Ubuntu-24.04 make docs`.
@@ -42,6 +46,10 @@ docs/            reports (generated: recon.md, imports.md, ghidra.md) and ADRs
 docs/adr/        architecture decision records (0000-template.md)
 tools/recon/     PE / import / COM recon (pefile + capstone)
 tools/ghidra/    headless Ghidra driver and JSON export script
+tools/lift/      lift driver over pcrecomp, prototype picker, leaf sweep
+tests/difftest/  our differential harness (Unicorn oracle vs lifted C)
+tests/fixtures/  synthetic PE for the binary-free CI path
+third_party/     pcrecomp (submodule)
 orig/            your game files (ignored)
 build/           everything generated from the binary (ignored)
 ```
