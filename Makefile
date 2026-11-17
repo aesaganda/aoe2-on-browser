@@ -13,7 +13,7 @@ GEN        := $(BUILD)/lift/gen
 GEN_STAMP  := $(GEN)/recomp_funcs.h
 PYTEST     := $(PY) -m pytest -q -p no:cacheprovider -n auto -rA
 
-.PHONY: help setup recon ghidra docs lift test test-synthetic test-binary test-pcrecomp sweep clean
+.PHONY: help setup recon ghidra docs lift native test test-synthetic test-binary test-pcrecomp sweep clean
 
 help:
 	@echo "make setup        one-time toolchain (venv, Ghidra) - see tools/setup-wsl.sh"
@@ -55,6 +55,10 @@ test-binary: $(if $(wildcard $(EXE)),$(GEN_STAMP))
 	$(PYTEST) tests/test_aoe2_prototype.py
 
 test: test-pcrecomp test-synthetic test-binary
+
+# Phase 1: native Linux binary (lifted code + pcrecomp win32hle + SDL2) -> build/native/aoe2
+native: $(GEN_STAMP)
+	$(MAKE) -f tools/native/native.mk -j$$(nproc)
 
 # Every leaf function (not just the 20 prototypes), 150 random states each: ~13 min on 20 cores.
 sweep: $(GEN_STAMP)
