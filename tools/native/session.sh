@@ -21,11 +21,14 @@ BIN="$(cd "$(dirname "$0")/../.." && pwd)/build/native/aoe2"
 
 geom() {   # picture rectangle on screen: x y w h (cached)
   if [[ -s "$DIR/geom" ]]; then cat "$DIR/geom"; return; fi
-  DISPLAY="$DISP" import -window root "$DIR/g.png" 2>/dev/null
-  local g; g=$(convert "$DIR/g.png" -fuzz 3% -trim -format "%X %Y %w %h" info: 2>/dev/null | sed 's/+//g')
-  # cache only a plausible picture (a black screen trims to 1x1)
-  if [[ $(echo "$g" | awk '{print ($3 >= 400 && $4 >= 300)}') == 1 ]]; then echo "$g" > "$DIR/geom"; fi
-  echo "$g"
+  local g
+  for _ in $(seq 1 30); do                    # wait for a picture (a black screen trims to 1x1)
+    DISPLAY="$DISP" import -window root "$DIR/g.png" 2>/dev/null
+    g=$(convert "$DIR/g.png" -fuzz 3% -trim -format "%X %Y %w %h" info: 2>/dev/null | sed 's/+//g')
+    if [[ $(echo "$g" | awk '{print ($3 >= 400 && $4 >= 300)}') == 1 ]]; then echo "$g" > "$DIR/geom"; echo "$g"; return; fi
+    sleep 1
+  done
+  echo "no picture on screen" >&2; return 1
 }
 
 case "${1:-}" in

@@ -22,6 +22,8 @@ void win32_gaps_register(void);    /* win32_gaps.c */
 void dplay_stub_register(void);    /* dplay_stub.c */
 void dplay_stub_register_com(void);
 void cdrom_mount(char letter, const char *dir, const char *label);   /* cdrom.c */
+void edit_overlay_install(void);   /* edit_overlay.c */
+void ddraw_debug_register(void);   /* ddraw_debug.c: AOE2_TRACE_BLT / AOE2_DUMP_SURFACES */
 
 #define HKLM 0x80000002u
 #define AOC_KEY "Software\\Microsoft\\Microsoft Games\\Age of Empires II: The Conquerors Expansion\\1.0"
@@ -54,6 +56,7 @@ int main(int argc, char **argv) {
     if (chdir(root) != 0) { perror(root); return 66; }
     aoc_shims_register();           /* first: same-named shims registered earlier win */
     dplay_stub_register();
+    ddraw_debug_register();
     /* The Conquerors disc image's contents, mounted as D: (cdrom.c) */
     char disc[PATH_MAX + 16], labelf[PATH_MAX + 16], label[64] = "";
     snprintf(disc, sizeof disc, "%s/cdrom", root);
@@ -72,6 +75,7 @@ int main(int argc, char **argv) {
     const char *hl = getenv("AOE2_HEADLESS");
     if (hle_screen_open("Age of Empires II: The Conquerors", 0, hl && !strcmp(hl, "1")) != 0)
         fprintf(stderr, "[aoe2] no window; continuing headless\n");
+    edit_overlay_install();         /* EDIT controls over the picture (chains screen.c's hook) */
     if (recomp_host_boot_permissive(exe) != 0) {
         fprintf(stderr, "boot failed: %s\n", exe);
         return 70;
