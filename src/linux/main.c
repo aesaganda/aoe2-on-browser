@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "host.h"
@@ -54,6 +55,10 @@ int main(int argc, char **argv) {
      * working directory: language_x1.dll and data\ are found relative to it.
      * win32hle's current directory is the host's. */
     if (chdir(root) != 0) { perror(root); return 66; }
+    /* win32hle's GetTempPathA is C:\WINDOWS\TEMP\. The game extracts DRS bitmaps
+     * (the minimap's mask, map800.bmp) to temp files there and OpenFile()s them, so
+     * the directory has to exist under the install root. */
+    mkdir("windows", 0755), mkdir("windows/temp", 0755);
     aoc_shims_register();           /* first: same-named shims registered earlier win */
     dplay_stub_register();
     ddraw_debug_register();
