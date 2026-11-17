@@ -83,6 +83,12 @@ int main(int argc, char **argv) {
     if (hle_screen_open("Age of Empires II: The Conquerors", 0, hl && !strcmp(hl, "1")) != 0)
         fprintf(stderr, "[aoe2] no window; continuing headless\n");
     edit_overlay_install();         /* EDIT controls over the picture (chains screen.c's hook) */
+    /* The game's own command-line switches (NOSTARTUP, DONTIGNORESYNC, ...): AOE2_ARGS.
+     * GetCommandLineA answers the exe's Windows path with them, as the shortcut would. */
+    static char cmdline[1024];
+    const char *args = getenv("AOE2_ARGS");
+    snprintf(cmdline, sizeof cmdline, "\"C:\\age2_x1\\age2_x1.exe\"%s%s", args && *args ? " " : "", args ? args : "");
+    hle_set_command_line(cmdline);
     if (recomp_host_boot_permissive(exe) != 0) {
         fprintf(stderr, "boot failed: %s\n", exe);
         return 70;
