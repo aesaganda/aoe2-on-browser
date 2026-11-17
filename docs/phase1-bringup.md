@@ -116,9 +116,21 @@ Seen but not fixed:
 - **typed text does not show** in the New Player edit box (it reaches the control: the profile gets the name);
 - the Town Center command panel shows some odd icons (to be checked against the original).
 
+### 2026-11-18: text, minimap, chat
+
+Tools added for this step:
+- `make native-trace` builds the same binary with every lifted function's entry counted. `kill -USR2` once resets the counts; a second time writes `/tmp/aoe2-funcs.txt`. Two such windows, diffed, show which guest functions one action ran.
+- `src/linux/ddraw_debug.c` adds a blit trace, surface dumps, and a page-protection watch on one back-buffer pixel.
+
+| Problem | Cause | Fix |
+|---|---|---|
+| Typed text not drawn in edit boxes | The game uses real Win32 EDIT child windows over its DirectDraw picture. win32hle keeps their state but nothing draws them on the primary | `src/linux/edit_overlay.c` draws each visible EDIT's text and caret on the primary (SDL_ttf). Patch 0002 adds the window queries it needs |
+| Minimap black (not even its frame) | The minimap panel (draw at 0x4484B0) left early because its diamond mask had not loaded. The mask is `map800.bmp`, resource 50411 in `interfac.drs` 'bina'. 0x4B03F0 copies it to `GetTempFileNameA(GetTempPathA())` and opens it with `OpenFile`. win32hle's temp path, `C:\WINDOWS\TEMP\`, did not exist under the install root | `main.c` creates `windows/temp` under the install root. Checked with the `marco` cheat: the minimap draws the whole map (terrain, water, forest, resources). Before that, black is just unexplored land |
+| Chat: after Return the game stays "Game Paused" and the picture freezes | Single-player chat pauses the game (comm state `+0x1E3C` 4). Return does unpause it (0x4309D0 → state 5). But the chat EDIT is destroyed while it has focus, and win32hle set the focus to none. The game's key dispatch (0x420BF0) only takes keys when `GetFocus()` is its window or a child, so input was dead, and the picture stayed frozen even with the game unpaused (not traced further: the fix below cured both) | Patch 0003: hiding or destroying the focus window moves the focus to its parent, with WM_KILLFOCUS/WM_SETFOCUS, as Windows does. Chat, Return and cheats work and the game resumes |
+
 ## Open
 
-- **Minimap black**; **edit-box text not drawn**; command-panel icons to check.
+- Command-panel icons to check against the original.
 
 - **SEH/C++ EH dispatch:** win32hle ends the run on `RaiseException`. The frame registry is in place; the guest-chain walk is not.
 - **DirectInput 7** (`DirectInputCreateEx`): win32hle has DirectInput 3/5 devices, but not the v7 entry point.
