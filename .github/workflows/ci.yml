@@ -1,0 +1,20 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    # CI never has the game binary (ADR-0002): it runs pcrecomp's self-test and the
+    # synthetic-PE differential tests; the AoE2 prototype tests skip themselves.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential mingw-w64 python3-venv
+      - name: Python venv
+        run: |
+          python3 -m venv "$HOME/.local/share/aoe2-recomp/venv"
+          "$HOME/.local/share/aoe2-recomp/venv/bin/pip" install -r tools/requirements.txt
+      - name: make test
+        run: make test
