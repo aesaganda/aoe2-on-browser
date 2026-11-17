@@ -28,8 +28,13 @@ def data_pointer_seeds(exe: str, funcs: list) -> list[int]:
 
     Ghidra leaves 18% of age2_x1's code bytes outside any function: code reached only
     through pointers (C++ static initialisers in the CRT's __xc_a table, vtables,
-    callbacks). Each such pointer becomes a lift entry. Pointers into the *middle* of
-    a known body are skipped: those are switch-table arms, which the body handles."""
+    callbacks). Each such pointer becomes a lift entry.
+
+    Pointers into the middle of a known body count too: MSVC6 keeps switch tables in
+    .text, so a pointer in .rdata/.data to mid-body is a real entry Ghidra merged into a
+    neighbour (pcrecomp's driver keeps both dispatchable, see find_splits). Immediates
+    are taken from a linear sweep of all code, not only Ghidra's bodies: the WndProc of
+    a window class (0x41E760) is stored by code that no Ghidra function owns."""
     import bisect
     import struct
 
@@ -46,10 +51,15 @@ def data_pointer_seeds(exe: str, funcs: list) -> list[int]:
         i = bisect.bisect_right(starts, a) - 1
         return i >= 0 and bodies[i][0] < a <= bodies[i][1]
     def wanted(v):
-        return v not in entries and any(lo <= v < hi for lo, hi in code) and not inside(v)
+        return v not in entries and any(lo <= v < hi for lo, hi in code)
     seeds = set()
     for s in pe.sections:
-        if s.Characteristics & 0x20000000 or not s.SizeOfRawData:
+        name = s.Name.rstrip(b"\0").decode(errors="replace")
+        # Data sections, plus code sections other than .text: age2_x1's `this_cod` is a
+        # hand-written threaded-code sprite blitter whose dispatch tables (`jmp [ebx*4 +
+        # 0x62F700]`) and fragment addresses live inside it. .text's own tables are
+        # MSVC switch tables, which pcrecomp resolves inside their bodies.
+        if (s.Characteristics & 0x20000000 and name == ".text") or not s.SizeOfRawData:
             continue
         data = s.get_data()
         for o in range(0, len(data) - 3, 4):
@@ -62,11 +72,14 @@ def data_pointer_seeds(exe: str, funcs: list) -> list[int]:
     from capstone import x86 as X
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
     md.detail = True
+    md.skipdata = True                        # keep going over bytes that do not decode
     mem = pe.get_memory_mapped_image()
-    for lo, hi in bodies:
-        for ins in md.disasm(bytes(mem[lo - base:hi + 1 - base]), lo):
-            if ins.mnemonic.startswith(("j", "call", "loop")):
-                continue                      # branch targets are the driver's job
+    for lo, hi in code:
+        for ins in md.disasm(bytes(mem[lo - base:hi - base]), lo):
+            if not ins.id or ins.mnemonic.startswith(("j", "call", "loop")):
+                continue                      # data bytes; branch targets are the driver's job
+            if ins.mnemonic not in ("push", "mov"):
+                continue                      # where code stores a function's address
             for op in ins.operands:
                 if op.type == X.X86_OP_IMM and wanted(op.imm & 0xFFFFFFFF):
                     seeds.add(op.imm & 0xFFFFFFFF)
