@@ -83,7 +83,49 @@ def data_pointer_seeds(exe: str, funcs: list) -> list[int]:
             for op in ins.operands:
                 if op.type == X.X86_OP_IMM and wanted(op.imm & 0xFFFFFFFF):
                     seeds.add(op.imm & 0xFFFFFFFF)
+    resolved = {int(j["at"], 16) for f in funcs for j in f.get("ijmps", []) if j.get("refs")}
+    seeds |= dispatch_table_targets(md, mem, base, code, wanted, owned=lambda a: a in resolved)
     return sorted(seeds)
+
+
+def dispatch_table_targets(md, mem, base, code, wanted, owned=lambda a: False) -> set[int]:
+    """Targets of `jmp/call [reg*4 + table]` anywhere in code, read from the table.
+
+    Hand-written assembly in age2_x1 (an inflate routine at 0x606xxx, the sprite
+    blitter) dispatches through tables Ghidra never resolved because no function owns
+    that code. A table is read until an entry stops pointing into code (or 256 entries).
+    Jumps whose table Ghidra resolved are skipped: those are MSVC switches, which
+    pcrecomp resolves within the body (seeding their arms only adds alias stubs). An
+    unresolved one inside a Ghidra body is scanned like any other (0x6074CB's table
+    at 0x606C4C)."""
+    from capstone import x86 as X
+    out = set()
+
+    def in_code(v):
+        return any(lo <= v < hi for lo, hi in code)
+    for lo, hi in code:
+        for ins in md.disasm(bytes(mem[lo - base:hi - base]), lo):
+            if not ins.id or ins.mnemonic not in ("jmp", "call") or len(ins.operands) != 1:
+                continue
+            # pcrecomp's table recogniser (disasm32._TABLE_JMP) misses a segment-prefixed
+            # operand (`jmp dword ptr cs:[ebx*4 + 0x606c54]`, hand-written asm), so those are
+            # seeded even when Ghidra resolved them
+            if owned(ins.address) and ":" not in ins.op_str:
+                continue
+            op = ins.operands[0]
+            if op.type != X.X86_OP_MEM or op.mem.index == 0 or op.mem.scale != 4 or op.mem.base != 0:
+                continue
+            table = op.mem.disp & 0xFFFFFFFF
+            for k in range(256):
+                off = table + 4 * k - base
+                if not (0 <= off < len(mem) - 3):
+                    break
+                v = int.from_bytes(mem[off:off + 4], "little")
+                if not in_code(v):
+                    break
+                if wanted(v):
+                    out.add(v)
+    return out
 
 
 def main():
