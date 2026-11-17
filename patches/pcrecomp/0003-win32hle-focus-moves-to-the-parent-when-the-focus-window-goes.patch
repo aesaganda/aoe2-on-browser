@@ -1,0 +1,39 @@
+--- a/runtime/win32hle/user32.c
++++ b/runtime/win32hle/user32.c
+@@ -473,10 +473,12 @@
+     }
+ }
+ 
++static void focus_leaves(win_t *x);
+ static void destroy(uint32_t h) {
+     win_t *x = W(h);
+     if (!x || x->destroying) return;
+     x->destroying = 1;
++    focus_leaves(x);
+     uncover(x);
+     for (int i = 0; i < MAX_WIN; i++)                    /* owned windows and children first */
+         if (g_win[i].used && (g_win[i].parent == h || g_win[i].owner == h)) destroy(g_win[i].hwnd);
+@@ -501,6 +503,15 @@
+     if (h && W(h)) hle_send(h, WM_SETFOCUS, old, 0);
+ }
+ 
++/* Hiding or destroying the focus window (or a window holding it) moves the focus to
++ * its parent, with WM_KILLFOCUS / WM_SETFOCUS, as Windows does: a game whose chat box
++ * closes gets its keyboard back in the main window (AoE2's key dispatch checks
++ * GetFocus() is its window or a child of it). A top-level window leaves no focus. */
++static void focus_leaves(win_t *x) {
++    if (!g_focus || !(g_focus == x->hwnd || is_descendant(g_focus, x->hwnd))) return;
++    set_focus(x->parent && W(x->parent) ? x->parent : 0);
++}
++
+ static void notify(win_t *x, uint32_t code) {
+     win_t *p = W(x->parent);
+     if (p) hle_send(p->hwnd, WM_COMMAND, (x->id & 0xFFFF) | (code << 16), x->hwnd);
+@@ -1579,6 +1590,7 @@
+     int was = (x->style & WS_VISIBLE) != 0, show = A32(1) != 0;   /* SW_HIDE is 0 */
+     if (was && !show) uncover(x);
+     if (show) x->style |= WS_VISIBLE; else x->style &= ~WS_VISIBLE;
++    if (was && !show) focus_leaves(x);
+     if (show != was) {
+         hle_send(x->hwnd, WM_SHOWWINDOW, (uint32_t)show, 0);
+         if ((x = W(A32(0))) && show) invalidate(x, 1);
