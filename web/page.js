@@ -105,7 +105,8 @@ async function refresh() {
   $('forget').hidden = !ok;
   $('pick').hidden = ok;
   try { $('server').hidden = ok || !(await fetch('install/manifest.json')).ok; } catch { $('server').hidden = true; }
-  if (ok) log('Your copy of the game is in this browser. Press Play.');
+  $('online').hidden = !ok;
+  if (ok) log('Your copy of the game is in this browser: play alone, or online below.');
 }
 
 // win32hle's screen.c hands each frame to the page (its __EMSCRIPTEN__ path): an
@@ -131,10 +132,47 @@ function presenter(module) {
   };
 }
 
-async function play() {
+// The multiplayer relay (tools/net/relay.py): beside the page behind a proxy (/relay),
+// or its own port when the page comes straight from tools/web/serve.py
+const RELAY = location.port === '8642' ? `//${location.hostname}:8643/relay` : `//${location.host}/relay`;
+const relayUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + RELAY;
+const roomsUrl = location.protocol + RELAY + '/rooms';
+
+// Online: the games on the relay, refreshed while this page shows. Joining or hosting
+// starts the game through DirectPlay lobby launch (its LOBBY switch,
+// src/net/dplay_net.c): straight into that game's setup screen.
+const playerName = () => ($('player').value.trim() || 'Player').slice(0, 15);
+async function listRooms() {
+  if ($('setup').hidden) return;
+  let rooms = [];
+  try { rooms = (await (await fetch(roomsUrl, { cache: 'no-store' })).json()).rooms; } catch { $('rooms').textContent = 'The game server cannot be reached.'; return; }
+  const box = $('rooms'), key = JSON.stringify(rooms) + $('play').hidden;
+  if (box.dataset.key === key) return;                  // unchanged: keep the buttons under the mouse
+  box.dataset.key = key;
+  box.replaceChildren();
+  if (!rooms.length) { box.textContent = 'No games yet: host one.'; return; }
+  for (const r of rooms) {
+    const row = document.createElement('div');
+    row.className = 'room';
+    const info = document.createElement('span');
+    info.textContent = `${r.name} — ${r.players.length}/${r.max} (${r.players.join(', ')})${r.open ? '' : ' · playing'}`;
+    const b = document.createElement('button');
+    b.textContent = 'Join';
+    b.disabled = !r.open || r.players.length >= r.max || $('play').hidden;
+    // Joining by lobby launch does not get past the game's "Setting up" screen yet
+    // (docs/phase3-multiplayer.md), so Join starts the game and shows the way to the room.
+    b.onclick = () => play({ hint: `In the game: Multiplayer → Online (aoe2-on-browser) → Show Games → “${r.name}” → Join` });
+    row.append(info, b);
+    box.append(row);
+  }
+}
+setInterval(listRooms, 3000);
+
+async function play(launch) {
   if (!crossOriginIsolated) { log('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
   if (!$('eula').checked) { log('The game runs only once its license agreement is accepted (the checkbox above).'); return; }
   $('setup').hidden = true;
+  if (launch && launch.hint) { $('hint').textContent = launch.hint; $('hint').hidden = false; setTimeout(() => { $('hint').hidden = true; }, 60000); }
   const canvas = $('canvas');
   canvas.hidden = false; canvas.focus();
   const s = document.createElement('script');
@@ -142,11 +180,16 @@ async function play() {
   const config = {
     canvas,
     arguments: [],
-    preRun: [(m) => { m.ENV.AOE2_ACCEPT_EULA = '1'; }],      // the owner's answer (src/linux/aoc_shims.c)
-    // the multiplayer relay (tools/net/relay.py): beside the page behind a proxy (/relay),
-    // or its own port when the page comes straight from tools/web/serve.py
-    relayUrl: location.port === '8642' ? `ws://${location.hostname}:8643/relay`
-                                       : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/relay`,
+    preRun: [(m) => {
+      m.ENV.AOE2_ACCEPT_EULA = '1';                     // the owner's answer (src/linux/aoc_shims.c)
+      if (launch && launch.lobby) {                     // a game from the list, or a new one
+        m.ENV.AOE2_ARGS = 'LOBBY';
+        m.ENV.AOE2_LOBBY = launch.lobby;
+        m.ENV.AOE2_ROOM = launch.room || '';
+        m.ENV.AOE2_PLAYER = playerName();
+      }
+    }],
+    relayUrl,
     print: (t) => console.log(t),
     printErr: (t) => console.warn(t),
   };
@@ -164,6 +207,10 @@ const guard = (f) => async () => {
 $('pick').onclick = guard(importFolder);
 $('server').onclick = guard(importServer);
 $('forget').onclick = guard(forget);
-$('play').onclick = play;
+$('play').onclick = () => play();
+$('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
+try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
+$('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
+listRooms();
 navigator.storage.persist?.();
 refresh();
