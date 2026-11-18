@@ -5,8 +5,10 @@
 
   /                 web/ (index.html, page.js) and build/web/ (aoe2.js, aoe2.wasm)
   /install/...      with --install: the install tree and install/manifest.json, for
-                    the page's "Copy from this server" (the owner's own files, to
-                    their own browser; never put this on a public server)
+                    the page's "Copy from this server". These are the owner's own
+                    files, for their own browser, so they are served only to direct
+                    loopback requests, never through a proxy such as `tailscale serve`
+                    (Handler.install_allowed). Never put this on a public server.
 
 Every response is cross-origin isolated (COOP/COEP), which the build's pthreads
 (SharedArrayBuffer) need.
@@ -43,19 +45,48 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
+    def install_allowed(self):
+        """The install tree goes only to a browser on this machine, asking this server
+        directly. Not through a proxy such as `tailscale serve`, which also connects
+        from 127.0.0.1: that would hand the owner's game files to other people."""
+        if not self.install:
+            return False
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            return False
+        proxied = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded", "Via",
+                   "Tailscale-User-Login", "Tailscale-User-Name", "Tailscale-Headers-Info")
+        if any(self.headers.get(h) is not None for h in proxied):
+            return False
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        return host in ("localhost", "127.0.0.1", "::1")
+
     def translate_path(self, path):
         rel = urllib.parse.unquote(urllib.parse.urlsplit(path).path).lstrip("/")
-        if rel.startswith("install/") and self.install:
-            return os.path.join(self.install, rel[len("install/"):])
+        rel = os.path.normpath(rel).replace(os.sep, "/") if rel else ""
+        if rel == "." or rel.startswith("../") or rel == ".." or os.path.isabs(rel):
+            return ""                                   # outside every root: 404
+        if rel.startswith("install/"):
+            if not self.install_allowed():
+                return ""
+            return self.inside(self.install, rel[len("install/"):])
         rel = rel or "index.html"
         for r in ROOTS:
-            p = os.path.join(r, rel)
-            if os.path.exists(p):
+            p = self.inside(r, rel)
+            if p and os.path.exists(p):
                 return p
-        return os.path.join(ROOTS[0], rel)
+        return self.inside(ROOTS[0], rel)
+
+    @staticmethod
+    def inside(root, rel):
+        rr = os.path.realpath(root)
+        p = os.path.realpath(os.path.join(rr, rel))
+        return p if p == rr or p.startswith(rr + os.sep) else ""
 
     def do_GET(self):
-        if self.install and urllib.parse.urlsplit(self.path).path == "/install/manifest.json":
+        if urllib.parse.urlsplit(self.path).path == "/install/manifest.json":
+            if not self.install_allowed():
+                self.send_error(404)
+                return
             body = manifest(self.install)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -67,7 +98,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         if urllib.parse.urlsplit(self.path).path == "/install/manifest.json":
-            self.send_response(200 if self.install else 404)
+            self.send_response(200 if self.install_allowed() else 404)
             self.end_headers()
             return
         super().do_HEAD()
