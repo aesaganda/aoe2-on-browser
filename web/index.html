@@ -37,6 +37,7 @@
   #status.ok { color: var(--ok); }
   #status.err { color: var(--err); }
   .dimmed { opacity: 0.5; pointer-events: none; }
+  .drop-active { outline: 2px dashed var(--accent); outline-offset: -4px; border-radius: 8px; }
   #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg); color: var(--dim); font: 16px system-ui, sans-serif; z-index: 10; }
   #loading progress { width: 200px; }
   .warn { background: #332200; border: 1px solid #664400; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #ffcc66; font-size: 13px; }
@@ -66,7 +67,7 @@
   <h1>Age of Empires II: The Conquerors — browser build</h1>
   <noscript><p style="color:var(--err)">This page needs JavaScript to run the game.</p></noscript>
   <div id="compat-warn" hidden class="warn"></div>
-  <p id="intro">Pick your installed copy of <strong>The Conquerors 1.0</strong> below — it is copied once into this
+  <p id="intro">Pick your installed copy of <strong>The Conquerors 1.0</strong> below, or drag the folder here — it is copied once into this
     browser (about 0.5 GB) and stays on this computer. After that, every visit goes straight to the game.</p>
   <p id="eula-row"><label><input type="checkbox" id="eula"> I accept the game's End User License Agreement
     (<code>eulax.rtf</code> in your install), as its own setup asks.</label></p>
@@ -89,7 +90,7 @@
   <span id="bar-text" style="font-size:12px;color:var(--dim)"></span>
   <div id="log" role="log" aria-live="polite"></div>
   <footer>
-    <span id="version"></span>
+    <span><span id="version"></span> <span id="storage-info" style="margin-left:8px"></span></span>
     <a href="#" id="help-link">Keyboard shortcuts</a>
   </footer>
 </div>

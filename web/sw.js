@@ -7,49 +7,66 @@
 //
 // Everything else (page.js, index.html, aoe2.json, api/, install/, relay/)
 // goes network-first so changes are live at once.
+//
+// The cache name includes the build version from /api/version. When the
+// build changes, the old cache is dropped on activation.
 'use strict';
 
-const CACHE = 'aoe2-v1';
+const CACHE_PREFIX = 'aoe2-';
 const PRECACHE = ['aoe2.js', 'aoe2.wasm'];
 const CACHE_FIRST = new Set(PRECACHE);
 
+let cacheName = CACHE_PREFIX + 'v1';
+
+async function getVersionedCacheName() {
+  try {
+    const r = await fetch('/api/version', { cache: 'no-store' });
+    const j = await r.json();
+    if (j.version) return CACHE_PREFIX + j.version;
+  } catch {}
+  return cacheName;
+}
+
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE)
-      .then((c) => c.addAll(PRECACHE))
-      .then(() => self.skipWaiting())
+    getVersionedCacheName().then((name) => {
+      cacheName = name;
+      return caches.open(cacheName)
+        .then((c) => c.addAll(PRECACHE))
+        .then(() => self.skipWaiting());
+    })
   );
 });
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
+    getVersionedCacheName().then((name) => {
+      cacheName = name;
+      return caches.keys()
+        .then((keys) => Promise.all(keys.filter((k) => k.startsWith(CACHE_PREFIX) && k !== cacheName).map((k) => caches.delete(k))))
+        .then(() => self.clients.claim());
+    })
   );
 });
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
 
-  // Only handle same-origin GET requests
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // Never cache API, relay, or install requests
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/relay') ||
       url.pathname.startsWith('/install/') || url.pathname === '/health') return;
 
   const filename = url.pathname.split('/').pop();
 
   if (CACHE_FIRST.has(filename)) {
-    // Cache-first for the big build outputs
     e.respondWith(
       caches.match(e.request).then((cached) => {
         if (cached) return cached;
         return fetch(e.request).then((r) => {
           if (r.ok) {
             const clone = r.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, clone));
+            caches.open(cacheName).then((c) => c.put(e.request, clone));
           }
           return r;
         });
@@ -58,13 +75,12 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // Network-first for page files: fast when online, cached fallback offline
   e.respondWith(
     fetch(e.request)
       .then((r) => {
         if (r.ok) {
           const clone = r.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, clone));
+          caches.open(cacheName).then((c) => c.put(e.request, clone));
         }
         return r;
       })
@@ -72,9 +88,11 @@ self.addEventListener('fetch', (e) => {
   );
 });
 
-// The page can ask us to refresh the cached build after `make web`
 self.addEventListener('message', (e) => {
   if (e.data === 'update-cache') {
-    caches.open(CACHE).then((c) => Promise.all(PRECACHE.map((f) => c.add(f + '?_=' + Date.now()))));
+    getVersionedCacheName().then((name) => {
+      cacheName = name;
+      caches.open(cacheName).then((c) => Promise.all(PRECACHE.map((f) => c.add(f + '?_=' + Date.now()))));
+    });
   }
 });

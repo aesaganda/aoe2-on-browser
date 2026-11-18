@@ -272,6 +272,11 @@ async function refresh() {
       }
       $('save-count').textContent = saves ? `${saves} saved game${saves > 1 ? 's' : ''}` : '';
     } catch { /* no SaveGame dir yet */ }
+    try {
+      const { quota, usage } = await navigator.storage.estimate();
+      const usedMB = (usage / 1e6).toFixed(0);
+      $('storage-info').textContent = `${usedMB} MB used`;
+    } catch {}
   } else {
     try { $('server').hidden = !(await fetch('install/manifest.json')).ok; } catch { $('server').hidden = true; }
   }
@@ -539,6 +544,46 @@ async function init() {
   startRoomPolling();
 }
 
+async function walkEntries(entry, prefix = '') {
+  if (entry.isFile) {
+    return new Promise((res) => entry.file((f) => res([[prefix + entry.name, f]])));
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const all = [];
+    const readBatch = () => new Promise((res) => reader.readEntries(res));
+    let batch;
+    do { batch = await readBatch(); for (const e of batch) all.push(...await walkEntries(e, prefix + entry.name + '/')); } while (batch.length);
+    return all;
+  }
+  return [];
+}
+
+async function handleDrop(e) {
+  e.preventDefault();
+  $('setup').classList.remove('drop-active');
+  if (await isComplete()) return;
+  const items = [...e.dataTransfer.items].filter((i) => i.kind === 'file');
+  if (!items.length) return;
+  const first = items[0];
+  if (first.getAsFileSystemHandle) {
+    const handle = await first.getAsFileSystemHandle();
+    if (handle.kind !== 'directory') { log('Drop a folder, not a single file.'); return; }
+    const files = [];
+    for await (const [path, h] of walk(handle)) if (!skip(path)) files.push([path, h]);
+    return guard(() => importFromFiles(files))();
+  }
+  const entry = first.webkitGetAsEntry?.();
+  if (entry && entry.isDirectory) {
+    const files = (await walkEntries(entry)).filter(([p]) => !skip(p));
+    return guard(() => importFromFiles(files))();
+  }
+  log('Drop your game install folder here.');
+}
+
+$('setup').addEventListener('dragover', (e) => { e.preventDefault(); $('setup').classList.add('drop-active'); });
+$('setup').addEventListener('dragleave', () => $('setup').classList.remove('drop-active'));
+$('setup').addEventListener('drop', handleDrop);
 $('pick').onclick = guard(importFolder);
 $('server').onclick = guard(importServer);
 $('forget').onclick = guard(forget);
