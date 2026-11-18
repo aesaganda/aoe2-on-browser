@@ -28,6 +28,7 @@ import signal
 import socketserver
 import subprocess
 import sys
+import threading
 import urllib.parse
 
 log = logging.getLogger("serve")
@@ -76,8 +77,11 @@ a{color:#c9a24a}</style></head>
 class Handler(http.server.SimpleHTTPRequestHandler):
     install = None
     owner = None
+    request_count = 0
+    _count_lock = threading.Lock()
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map,
                       ".wasm": "application/wasm", ".js": "text/javascript", ".mjs": "text/javascript"}
+    timeout = 120
 
     def log_message(self, fmt, *args):
         log.info("%s %s", self.address_string(), fmt % args)
@@ -195,10 +199,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        with self._count_lock:
+            Handler.request_count += 1
         path = urllib.parse.urlsplit(self.path).path
 
         if path == "/health":
-            return self._json_response({"ok": True})
+            return self._json_response({"ok": True, "requests": Handler.request_count})
 
         if path == "/api/version":
             v = _git_version()
@@ -281,10 +287,15 @@ def main():
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     server = socketserver.ThreadingTCPServer(("127.0.0.1", a.port), Handler)
     server.daemon_threads = True
+    server.request_queue_size = 32
+    server.timeout = 120
 
     def shutdown(sig, frame):
         log.info("shutting down (signal %d)", sig)
-        server.shutdown()
+        # shutdown() must run from a different thread than serve_forever()
+        threading.Thread(target=server.shutdown, daemon=True).start()
+        # Hard exit if graceful shutdown hangs (e.g. a slow transfer)
+        threading.Timer(5.0, lambda: os._exit(0)).start()
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
