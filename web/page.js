@@ -145,9 +145,15 @@ async function refresh() {
   $('play').hidden = !ok;
   $('forget').hidden = !ok;
   $('pick').hidden = ok;
-  try { $('server').hidden = ok || !(await fetch('install/manifest.json')).ok; } catch { $('server').hidden = true; }
   $('online').hidden = !ok;
-  if (ok) log('Your copy of the game is in this browser: play alone, or online below.');
+  if (ok) {
+    $('eula').checked = true;
+    $('eula-row').hidden = true;
+    $('intro').hidden = true;
+    $('server').hidden = true;
+  } else {
+    try { $('server').hidden = !(await fetch('install/manifest.json')).ok; } catch { $('server').hidden = true; }
+  }
 }
 
 // win32hle's screen.c hands each frame to the page (its __EMSCRIPTEN__ path): an
@@ -246,6 +252,34 @@ const guard = (f) => async () => {
   for (const b of document.querySelectorAll('button')) b.disabled = false;
   await refresh();
 };
+
+async function init() {
+  const complete = await isComplete();
+  if (complete) { await refresh(); return; }
+
+  let me = { owner: false, install: false };
+  try { me = await (await fetch('api/me', { cache: 'no-store' })).json(); } catch {}
+
+  if (me.owner && me.install) {
+    $('eula').checked = true;
+    $('eula-row').hidden = true;
+    $('intro').textContent = 'Loading your game…';
+    $('pick').hidden = true;
+    try {
+      await importServer();
+      await refresh();
+    } catch (e) {
+      log('Could not load automatically: ' + e.message);
+      $('intro').textContent = 'Pick your install folder to get started.';
+      $('eula-row').hidden = false;
+      await refresh();
+    }
+    return;
+  }
+
+  await refresh();
+}
+
 $('pick').onclick = guard(importFolder);
 $('server').onclick = guard(importServer);
 $('forget').onclick = guard(forget);
@@ -255,4 +289,4 @@ try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
 $('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
 listRooms();
 navigator.storage.persist?.();
-refresh();
+init();

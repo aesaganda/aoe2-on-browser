@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Run the multiplayer platform as services (Phase 3, docs/phase3-multiplayer.md):
 #
-#   sudo tools/deploy/install-services.sh <install-root>     # install, enable, start
-#   sudo tools/deploy/install-services.sh --remove           # stop, disable, remove
+#   sudo tools/deploy/install-services.sh <install-root> [<owner-login>]
+#   sudo tools/deploy/install-services.sh --remove
+#
+#   <owner-login> is the Tailscale login (email) of the owner. With it, the owner's
+#   browser auto-loads the game on first visit through the tailnet. Without it, the
+#   install is served only to direct loopback requests (this machine's browser).
 #
 #   aoe2-relay.service  tools/net/relay.py      ws 127.0.0.1:8643/relay, tcp 127.0.0.1:8644
 #   aoe2-web.service    tools/web/serve.py      the page on 127.0.0.1:8642; with the
-#                                               install root, "Copy from this server" for
-#                                               browsers on this machine only (serve.py)
+#                                               install root and owner identity
 #
 # Both listen on loopback only; a proxy in front (tailscale serve) puts them on the
 # tailnet. They run from this checkout, as the user who owns it, and restart if they
@@ -24,7 +27,8 @@ if [[ "${1:-}" == --remove ]]; then
   exit 0
 fi
 
-INSTALL=${1:?usage: install-services.sh <install-root> | --remove}
+INSTALL=${1:?usage: install-services.sh <install-root> [<owner-login>] | --remove}
+OWNER_LOGIN=${2:-}
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 OWNER=$(stat -c %U "$REPO")
 [[ -d "$INSTALL/age2_x1" ]] || { echo "$INSTALL has no age2_x1/: give the game's install root" >&2; exit 1; }
@@ -50,7 +54,9 @@ WantedBy=multi-user.target
 EOF
 }
 unit aoe2-relay "aoe2-on-browser: multiplayer relay" "/usr/bin/python3 $REPO/tools/net/relay.py"
-unit aoe2-web "aoe2-on-browser: web page" "/usr/bin/python3 $REPO/tools/web/serve.py --install $INSTALL"
+WEB_CMD="/usr/bin/python3 $REPO/tools/web/serve.py --install $INSTALL"
+[[ -n "$OWNER_LOGIN" ]] && WEB_CMD+=" --owner $OWNER_LOGIN"
+unit aoe2-web "aoe2-on-browser: web page" "$WEB_CMD"
 systemctl daemon-reload
 for u in "${UNITS[@]}"; do systemctl enable "$u.service" >/dev/null 2>&1; systemctl restart "$u.service"; done
 sleep 2

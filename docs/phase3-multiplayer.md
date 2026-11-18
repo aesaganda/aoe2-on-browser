@@ -24,13 +24,13 @@ By hand:
 
 ```
 python3 tools/net/relay.py                                   # ws :8643/relay, tcp :8644
-python3 tools/web/serve.py --install <install-root>          # the page, :8642
+python3 tools/web/serve.py --install <install-root> --owner <login>  # the page, :8642
 ```
 
 As services that start with the machine (systemd), this is how the owner's PC runs:
 
 ```
-sudo tools/deploy/install-services.sh <install-root>         # aoe2-relay, aoe2-web: enable + start
+sudo tools/deploy/install-services.sh <install-root> <owner-login>  # aoe2-relay, aoe2-web
 sudo tools/deploy/install-services.sh --remove
 journalctl -u aoe2-relay -f                                  # who joins what
 ```
@@ -103,13 +103,29 @@ folder…" (Chrome or Edge). Over the tailnet the page sends the isolation heade
   plain Windows install has none, so it plays no videos, and the game carries on
   without them.
 
+## Owner auto-load
+
+With `--owner <tailscale-login>`, the page auto-loads the game on the owner's first
+visit through the tailnet. The server checks the `Tailscale-User-Login` header that
+`tailscale serve` adds: if it matches the configured owner, `/install/` is allowed
+and `/api/me` returns `{"owner": true, "install": true}`. The page's `init()`
+fetches `/api/me`, auto-imports from the server without any button press, and skips
+straight to the game list. On return visits the copy is already in the browser, so
+the page shows the game list at once.
+
+For other players, `/install/` returns 404 and `/api/me` returns `owner: false`.
+They use "Choose your install folder…" to copy their own install once, and then also
+skip straight to the game list on every later visit.
+
+```
+sudo tools/deploy/install-services.sh <install-root> <owner-tailscale-login>
+```
+
 ## The page server and the tailnet
 
-`tools/web/serve.py --install` serves the owner's install tree to the page's "Copy
-from this server". `tailscale serve` forwards to it from 127.0.0.1, so until
-2026-11-18 that tree was reachable by anyone on the tailnet. It is now served only
-to requests that come straight from loopback: a loopback Host, and no
-`X-Forwarded-*`, `Forwarded`, `Via` or `Tailscale-*` headers.
+`tools/web/serve.py --install` serves the owner's install tree. With `--owner` it is
+also available through the tailnet to the owner's Tailscale identity. Without
+`--owner` (or for anyone else), it is served only to direct loopback requests.
 
 Paths are now normalised and confined to their root. Before, a raw `../` in a
 request could read any file the server could. Over the tailnet, `/install/…` now

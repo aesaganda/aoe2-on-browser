@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Serve the browser build for development (Phase 2):
 
-    tools/web/serve.py [--port 8642] [--install <install-root>]
+    tools/web/serve.py [--port 8642] [--install <install-root>] [--owner <login>]
 
   /                 web/ (index.html, page.js) and build/web/ (aoe2.js, aoe2.wasm)
   /install/...      with --install: the install tree and install/manifest.json, for
-                    the page's "Copy from this server". These are the owner's own
-                    files, for their own browser, so they are served only to direct
-                    loopback requests, never through a proxy such as `tailscale serve`
-                    (Handler.install_allowed). Never put this on a public server.
+                    the page's auto-copy on the owner's first visit. Served only to:
+                    - direct loopback requests (the owner's own machine, no proxy);
+                    - with --owner, the owner's Tailscale identity through
+                      `tailscale serve` (Tailscale-User-Login header).
+                    Never put this on a public server.
+  /api/me           {"owner": bool, "install": bool}: lets the page know whether the
+                    visitor is the owner and whether auto-copy is available.
 
 Every response is cross-origin isolated (COOP/COEP), which the build's pthreads
 (SharedArrayBuffer) need.
@@ -35,6 +38,7 @@ def manifest(install):
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     install = None
+    owner = None
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map,
                       ".wasm": "application/wasm", ".js": "text/javascript", ".mjs": "text/javascript"}
 
@@ -45,12 +49,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
-    def install_allowed(self):
-        """The install tree goes only to a browser on this machine, asking this server
-        directly. Not through a proxy such as `tailscale serve`, which also connects
-        from 127.0.0.1: that would hand the owner's game files to other people."""
-        if not self.install:
-            return False
+    def _direct_loopback(self):
+        """True when the browser is on this machine, talking directly (no proxy)."""
         if self.client_address[0] not in ("127.0.0.1", "::1"):
             return False
         proxied = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded", "Via",
@@ -59,6 +59,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return False
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
         return host in ("localhost", "127.0.0.1", "::1")
+
+    def _is_owner(self):
+        """True when the visitor is the owner: direct loopback, or the owner's
+        Tailscale login through `tailscale serve`."""
+        if self._direct_loopback():
+            return True
+        if not self.owner:
+            return False
+        login = self.headers.get("Tailscale-User-Login")
+        return login is not None and login.lower() == self.owner
+
+    def install_allowed(self):
+        """The install tree goes only to the owner: directly on this machine, or
+        through Tailscale when their login matches --owner."""
+        if not self.install:
+            return False
+        return self._is_owner()
 
     def translate_path(self, path):
         rel = urllib.parse.unquote(urllib.parse.urlsplit(path).path).lstrip("/")
@@ -83,7 +100,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return p if p == rr or p.startswith(rr + os.sep) else ""
 
     def do_GET(self):
-        if urllib.parse.urlsplit(self.path).path == "/install/manifest.json":
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/api/me":
+            is_owner = self._is_owner()
+            body = json.dumps({"owner": is_owner, "install": bool(self.install) and is_owner}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/install/manifest.json":
             if not self.install_allowed():
                 self.send_error(404)
                 return
@@ -108,11 +135,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8642)
     ap.add_argument("--install")
+    ap.add_argument("--owner", help="Tailscale login (email) of the owner")
     a = ap.parse_args()
     Handler.install = os.path.realpath(a.install) if a.install else None
+    Handler.owner = a.owner.lower() if a.owner else None
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     with socketserver.ThreadingTCPServer(("127.0.0.1", a.port), Handler) as s:
-        print(f"http://localhost:{a.port}/" + (f"  (install: {Handler.install})" if a.install else ""), flush=True)
+        info = f"http://localhost:{a.port}/"
+        if a.install:
+            info += f"  (install: {Handler.install}"
+            if Handler.owner:
+                info += f", owner: {Handler.owner}"
+            info += ")"
+        print(info, flush=True)
         s.serve_forever()
 
 
