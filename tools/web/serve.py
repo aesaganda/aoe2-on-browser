@@ -74,6 +74,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; "
+                         "script-src 'self' 'wasm-unsafe-eval'; "
+                         "style-src 'self' 'unsafe-inline'; "
+                         "img-src 'self' blob: data:; "
+                         "connect-src 'self' ws: wss:; "
+                         "worker-src 'self'; "
+                         "frame-ancestors 'none'")
         p = urllib.parse.urlsplit(self.path).path
         ext = os.path.splitext(p)[1].lower()
         self.send_header("Cache-Control", CACHE_LONG if ext in LONG_CACHE_EXT else CACHE_SHORT)

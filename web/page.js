@@ -375,6 +375,7 @@ $('forget').onclick = guard(forget);
 $('play').onclick = () => play();
 $('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
 $('fullscreen-btn').onclick = toggleFullscreen;
+$('canvas').addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('keydown', (e) => {
   if (e.key === 'F11' && $('setup').hidden) { e.preventDefault(); toggleFullscreen(); }
 });
