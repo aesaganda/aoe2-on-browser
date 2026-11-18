@@ -56,8 +56,47 @@ static void lb_ConnectEx(void) {                        /* (this, flags, iid, &d
 }
 uint32_t dplay_net_lobby_set(uint32_t conn);
 static void lb_SetConnectionSettings(void) { RET(dplay_net_lobby_set(A32(3)), 4); }   /* (this, flags, appid, conn) */
-static void lb_ReceiveLobbyMessage(void) { RET(0x887700BEu /* DPERR_NOMESSAGES */, 6); }
-static void lb_SendLobbyMessage(void) { RET(DP_OK, 5); }     /* status for the lobby: nobody listens */
+/* Lobby messages. After a lobby launch the game asks the lobby for its "preset data"
+ * (DPLSYS_GETPROPERTY, sent from 0x437EF0) and waits up to 30 s on the "Setting up
+ * multiplayer game" screen until both its player ID is set and that property's
+ * answer has come (satisfyLobbyLaunchCriteria, 0x437DE0). We are the lobby and have
+ * no presets: we answer "not supported", which the game takes as retrieved
+ * (0x437D5A, "PresetData not supported") and launches at once. Other messages
+ * (status for the lobby) have nobody to read them. */
+#define DPLSYS_GETPROPERTY          7u
+#define DPLSYS_GETPROPERTYRESPONSE  8u
+#define DPERR_NOMESSAGES            0x887700BEu
+#define DPERR_BUFFERTOOSMALL        0x8877001Eu
+static uint8_t g_lobby_reply[0x34];                   /* DPLMSG_GETPROPERTYRESPONSE */
+static int g_lobby_reply_pending;
+
+static void lb_SendLobbyMessage(void) {                 /* (this, flags, appid, data, size) */
+    uint32_t data = A32(3), size = A32(4);
+    if (data && size >= 0x28 && MEM32(data) == DPLSYS_GETPROPERTY) {
+        /* request: dwType, dwRequestID, guidPlayer, guidPropertyTag */
+        memset(g_lobby_reply, 0, sizeof g_lobby_reply);
+        uint32_t *r = (uint32_t *)g_lobby_reply;
+        r[0] = DPLSYS_GETPROPERTYRESPONSE;
+        r[1] = MEM32(data + 4);
+        for (int i = 0; i < 8; i++) r[2 + i] = MEM32(data + 8 + 4 * i);   /* both GUIDs */
+        r[10] = DPERR_UNSUPPORTED;                      /* hr: no such property here */
+        r[11] = 0;                                      /* dwDataSize */
+        g_lobby_reply_pending = 1;
+        TRACE("lobby GetProperty request %u -> not supported\n", r[1]);
+    }
+    RET(DP_OK, 5);
+}
+static void lb_ReceiveLobbyMessage(void) {              /* (this, flags, appid, &msgflags, data, &size) */
+    if (!g_lobby_reply_pending) RET(DPERR_NOMESSAGES, 6);
+    uint32_t psize = A32(5), need = sizeof g_lobby_reply;
+    if (!psize) RET(DPERR_BUFFERTOOSMALL, 6);
+    if (!A32(4) || MEM32(psize) < need) { MEM32(psize) = need; RET(DPERR_BUFFERTOOSMALL, 6); }
+    memcpy(hle_ptr(A32(4)), g_lobby_reply, need);
+    MEM32(psize) = need;
+    if (A32(3)) MEM32(A32(3)) = 0;                      /* a standard (not DPLMSG_SYSTEM) message */
+    g_lobby_reply_pending = 0;
+    RET(DP_OK, 6);
+}
 static void lb_SetLobbyMessageEvent(void) { RET(DP_OK, 4); }
 static void lb_EnumLocalApplications(void) { RET(DP_OK, 4); }
 
