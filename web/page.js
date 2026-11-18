@@ -552,6 +552,54 @@ function stopPingPolling() {
   $('ping').textContent = '';
 }
 
+// --- Wake lock (keep screen on during gameplay) ---
+let wakeLock = null;
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+}
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && gameRunning) requestWakeLock();
+});
+
+// --- Tab visibility warning ---
+function updateVisibilityWarning() {
+  let el = $('tab-warn');
+  if (document.hidden && gameRunning) {
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'tab-warn';
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:30;background:#661100;color:#ffcc66;text-align:center;padding:8px 16px;font-size:14px';
+      el.textContent = 'The game is paused — keep this tab visible to avoid stalling multiplayer.';
+      document.body.appendChild(el);
+    }
+  } else if (el) {
+    el.remove();
+  }
+}
+document.addEventListener('visibilitychange', updateVisibilityWarning);
+
+// --- Game timer ---
+let gameStartTime = 0;
+let timerInterval = null;
+function startGameTimer() {
+  gameStartTime = Date.now();
+  timerInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - gameStartTime) / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    $('game-timer').textContent = h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
+  }, 1000);
+}
+function stopGameTimer() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  $('game-timer').textContent = '';
+}
+
 function notifyJoin(name) {
   if (Notification.permission !== 'granted') return;
   try { new Notification('Player joined', { body: name + ' joined your game', icon: 'icon-192.png', tag: 'join-' + name }); } catch {}
@@ -576,6 +624,9 @@ function returnToLobby(msg) {
   gameRunning = false;
   hostedRoom = null;
   stopPingPolling();
+  releaseWakeLock();
+  stopGameTimer();
+  updateVisibilityWarning();
   $('loading').hidden = true;
   $('game-ui').hidden = true;
   $('canvas').hidden = true;
@@ -610,6 +661,8 @@ async function play(launch) {
   await videoStandIns(await root()).catch(() => {});
   gameRunning = true;
   stopRoomPolling();
+  requestWakeLock();
+  startGameTimer();
   if (launch && launch.lobby) startPingPolling();
   $('setup').hidden = true;
   $('loading').hidden = false;
