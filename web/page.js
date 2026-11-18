@@ -297,7 +297,20 @@ async function showSaves() {
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
     };
-    row.append(info, dl);
+    const del = document.createElement('button');
+    del.textContent = '×';
+    del.title = 'Delete ' + f.name;
+    del.style.cssText = 'margin:0 0 0 4px;padding:2px 6px;font-size:12px;color:var(--err);border-color:transparent;background:transparent';
+    del.onclick = async () => {
+      const dir = await getSaveDir();
+      if (!dir) return;
+      await dir.removeEntry(f.name);
+      row.remove();
+      const remaining = list.querySelectorAll('div').length;
+      if (!remaining) { list.textContent = 'No saved games yet.'; }
+      $('save-count').textContent = remaining ? remaining + ' save' + (remaining > 1 ? 's' : '') : '';
+    };
+    row.append(info, dl, del);
     list.append(row);
   }
   list.hidden = false;
@@ -341,6 +354,34 @@ function presenter(module) {
     },
     ra2Menu(open) { scr.hidden = !!open; },
   };
+}
+
+// --- Audio context resume (browsers block autoplay) ---
+function resumeAudioContexts() {
+  if (typeof SDL === 'object' && SDL.audioContext && SDL.audioContext.state === 'suspended') {
+    SDL.audioContext.resume();
+  }
+  const ctxs = window._audioContexts;
+  if (Array.isArray(ctxs)) {
+    for (const ctx of ctxs) {
+      if (ctx.state === 'suspended') ctx.resume();
+    }
+  }
+}
+for (const evt of ['click', 'keydown', 'touchstart']) {
+  document.addEventListener(evt, resumeAudioContexts, { capture: true, passive: true });
+}
+const OrigAudioContext = window.AudioContext || window.webkitAudioContext;
+if (OrigAudioContext) {
+  window._audioContexts = [];
+  const OrigCtor = OrigAudioContext;
+  window.AudioContext = function (...args) {
+    const ctx = new OrigCtor(...args);
+    window._audioContexts.push(ctx);
+    return ctx;
+  };
+  window.AudioContext.prototype = OrigCtor.prototype;
+  if (window.webkitAudioContext) window.webkitAudioContext = window.AudioContext;
 }
 
 // --- Fullscreen ---
@@ -391,6 +432,15 @@ async function listRooms() {
     if (consecutiveFails >= 2) setStatus(false, 'offline');
     $('rooms').textContent = 'Cannot reach the game server.';
     return;
+  }
+  if (hostedRoom) {
+    const mine = rooms.find((r) => r.name === hostedRoom);
+    if (mine) {
+      for (const p of mine.players) {
+        if (!knownPlayers.has(p)) { notifyJoin(p); }
+      }
+      knownPlayers = new Set(mine.players);
+    }
   }
   const box = $('rooms'), key = JSON.stringify(rooms) + $('play').hidden;
   if (box.dataset.key === key) return;
@@ -461,6 +511,13 @@ window.addEventListener('offline', () => {
 });
 
 let gameRunning = false;
+let hostedRoom = null;
+let knownPlayers = new Set();
+
+function notifyJoin(name) {
+  if (Notification.permission !== 'granted') return;
+  try { new Notification('Player joined', { body: name + ' joined your game', icon: 'icon-192.png', tag: 'join-' + name }); } catch {}
+}
 
 function openOnline() {
   if (!$('setup').hidden) return;
@@ -479,6 +536,7 @@ function closeOnline() {
 
 function returnToLobby(msg) {
   gameRunning = false;
+  hostedRoom = null;
   $('loading').hidden = true;
   $('game-ui').hidden = true;
   $('canvas').hidden = true;
@@ -525,9 +583,43 @@ async function play(launch) {
   $('retry-btn').hidden = true;
   const canvas = $('canvas');
   canvas.hidden = false; canvas.focus();
+  const wasmSize = 42 * 1e6;
   const config = {
     canvas,
     arguments: [],
+    instantiateWasm(imports, callback) {
+      loadText.textContent = 'Downloading game engine…';
+      loadSub.textContent = '';
+      fetch('aoe2.wasm')
+        .then((r) => {
+          if (!r.ok) throw new Error('WASM fetch failed: ' + r.status);
+          const contentLength = parseInt(r.headers.get('content-length') || '0', 10) || wasmSize;
+          const reader = r.body.getReader();
+          const chunks = [];
+          let received = 0;
+          const pump = () => reader.read().then(({ done, value }) => {
+            if (done) return;
+            chunks.push(value);
+            received += value.length;
+            loadBar.value = received / contentLength;
+            const mb = (received / 1e6).toFixed(0);
+            const totalMB = (contentLength / 1e6).toFixed(0);
+            loadSub.textContent = `${mb} / ${totalMB} MB`;
+            return pump();
+          });
+          return pump().then(() => {
+            const merged = new Uint8Array(received);
+            let off = 0;
+            for (const c of chunks) { merged.set(c, off); off += c.length; }
+            loadText.textContent = 'Compiling…';
+            loadSub.textContent = '';
+            return WebAssembly.instantiate(merged.buffer, imports);
+          });
+        })
+        .then((result) => { callback(result.instance, result.module); })
+        .catch((e) => { returnToLobby('Failed to load the game engine: ' + e.message); });
+      return {};
+    },
     preRun: [(m) => {
       m.ENV.AOE2_ACCEPT_EULA = '1';
       m.ENV.AOE2_TRACE_VIDEO = '1';
@@ -591,7 +683,11 @@ async function init() {
     log('Joining game from invite link…');
   } else if (hostParam) {
     history.replaceState(null, '', location.pathname);
-    launch = { lobby: 'host', room: (roomParam || `${playerName()}'s game`).slice(0, 30) };
+    const room = (roomParam || `${playerName()}'s game`).slice(0, 30);
+    launch = { lobby: 'host', room };
+    hostedRoom = room;
+    knownPlayers = new Set([playerName()]);
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
   }
 
   const exe = await copiedExe().catch(() => null);
@@ -619,7 +715,13 @@ async function init() {
 
 $('online-btn').onclick = () => { if ($('setup').hidden) openOnline(); else closeOnline(); };
 $('play').onclick = () => { if (gameRunning) closeOnline(); else play(); };
-$('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
+$('host').onclick = () => {
+  const room = ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30);
+  hostedRoom = room;
+  knownPlayers = new Set([playerName()]);
+  if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
+  play({ lobby: 'host', room });
+};
 $('retry-btn').onclick = () => location.reload();
 $('saves-btn').onclick = showSaves;
 $('import-rec').onclick = importRecording;
