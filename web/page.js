@@ -104,7 +104,7 @@ async function refresh() {
   $('play').hidden = !ok;
   $('forget').hidden = !ok;
   $('pick').hidden = ok;
-  try { $('server').hidden = ok || !(await fetch('install/manifest.json', { method: 'HEAD' })).ok; } catch { $('server').hidden = true; }
+  try { $('server').hidden = ok || !(await fetch('install/manifest.json')).ok; } catch { $('server').hidden = true; }
   if (ok) log('Your copy of the game is in this browser. Press Play.');
 }
 
@@ -143,6 +143,10 @@ async function play() {
     canvas,
     arguments: [],
     preRun: [(m) => { m.ENV.AOE2_ACCEPT_EULA = '1'; }],      // the owner's answer (src/linux/aoc_shims.c)
+    // the multiplayer relay (tools/net/relay.py): beside the page behind a proxy (/relay),
+    // or its own port when the page comes straight from tools/web/serve.py
+    relayUrl: location.port === '8642' ? `ws://${location.hostname}:8643/relay`
+                                       : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/relay`,
     print: (t) => console.log(t),
     printErr: (t) => console.warn(t),
   };
