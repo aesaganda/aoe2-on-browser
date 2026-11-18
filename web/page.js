@@ -1,18 +1,21 @@
-// The page around the WebAssembly build (Phase 2, ADR-0005).
+// The page around the WebAssembly build (Phase 2 & 3, ADR-0005 / ADR-0006).
 //
 // On first visit, the game's files are automatically downloaded from the server
 // (/install/...) into the origin private file system (OPFS) under aoe2/, and the
 // module (build/web/aoe2.js) mounts OPFS and runs the game from /opfs/aoe2
 // (src/web/web_fs.c). On subsequent visits the cached OPFS copy boots directly.
-//
-// Not copied: the disc tree (the game only checks that a CD with the right label is
-// there: an empty cdrom/ and cdrom.label stand for it), the AVIs and .cab archives.
-// The MPEG-1 copies beside the AVIs are what plays (ADR-0004), but the game plays a
-// video only if its .avi exists, so each copy gets an empty .avi beside it
-// (videoStandIns). An install without the copies plays no videos.
 'use strict';
 const $ = (id) => document.getElementById(id);
-const log = (s) => { const el = $('log'); el.textContent += s + '\n'; el.scrollTop = 1e9; };
+const log = (s) => {
+  const el = $('log');
+  if (!el) return;
+  el.textContent += s + '\n';
+  el.scrollTop = 1e9;
+};
+const setLoadPhase = (text) => {
+  const el = $('load-phase');
+  if (el) el.textContent = text;
+};
 const DISC_LABEL = 'AGE2_X1';
 const MARK = '.complete';
 
@@ -93,7 +96,6 @@ async function isComplete() {
   try { await (await root()).getFileHandle(MARK); return true; } catch { return false; }
 }
 
-const EXE_PATH = 'age2_x1/age2_x1.exe';
 async function exeProblem(file) {
   let want;
   try { want = (await (await fetch('aoe2.json', { cache: 'no-store' })).json()).exe; } catch { return null; }
@@ -141,23 +143,170 @@ async function fetchRetry(url, opts, retries = 3) {
   }
 }
 
-async function importServer() {
-  const loadText = $('load-text');
-  const loadBar = $('load-bar');
-  const loadSub = $('load-sub');
-  loadText.textContent = 'Checking game files…';
-  loadBar.hidden = false;
-  loadBar.removeAttribute('value');
-  loadSub.textContent = '';
+async function importBundle(base, loadText, loadBar, loadSub) {
+  setLoadPhase('Step 1/2 · Game Assets');
+  const r = await fetchRetry('install/bundle.tar', { cache: 'no-store' });
+  const total = parseInt(r.headers.get('content-length') || '0', 10);
+  if (total > 0) await checkStorage(total);
+  if (!r.body) throw new Error('ReadableStream not supported for bundle.tar');
 
+  loadText.textContent = 'Downloading & caching game files…';
+  loadBar.value = 0;
+  const start = performance.now();
+  let doneBytes = 0;
+  let fileCount = 0;
+  const totalMB = total > 0 ? (total / 1e6).toFixed(0) : '?';
+
+  const updateProgress = (n) => {
+    doneBytes += n;
+    if (total > 0) loadBar.value = Math.min(1, doneBytes / total);
+    const elapsed = (performance.now() - start) / 1000;
+    const doneMB = (doneBytes / 1e6).toFixed(0);
+    if (elapsed > 0.15 && doneBytes > 0) {
+      const speed = doneBytes / elapsed;
+      const mb = (speed / 1e6).toFixed(1);
+      if (total > 0) {
+        const left = Math.max(0, (total - doneBytes) / speed);
+        const pct = Math.floor(Math.min(100, (doneBytes / total) * 100));
+        const eta = left < 60 ? `${Math.ceil(left)}s` : `${Math.floor(left / 60)}m ${Math.ceil(left % 60)}s`;
+        loadSub.textContent = `${pct}% (${doneMB} / ${totalMB} MB) · ${mb} MB/s — ${eta} left`;
+      } else {
+        loadSub.textContent = `${doneMB} MB · ${mb} MB/s`;
+      }
+    }
+  };
+
+  const dirHandles = new Map([['', base]]);
+  const ensureDir = async (dirPath) => {
+    if (!dirPath) return base;
+    let cached = dirHandles.get(dirPath);
+    if (cached) return cached;
+    const parts = dirPath.split('/');
+    let cur = base;
+    let acc = '';
+    for (const part of parts) {
+      acc = acc ? acc + '/' + part : part;
+      let next = dirHandles.get(acc);
+      if (!next) {
+        next = await cur.getDirectoryHandle(part, { create: true });
+        dirHandles.set(acc, next);
+      }
+      cur = next;
+    }
+    return cur;
+  };
+
+  const inFlight = new Set();
+  let inFlightBytes = 0;
+  const enqueueWrite = async (dir, name, data) => {
+    while (inFlight.size >= 8 || (inFlight.size > 0 && inFlightBytes + data.byteLength > 32 * 1024 * 1024)) {
+      await Promise.race(inFlight);
+    }
+    inFlightBytes += data.byteLength;
+    const p = writeFileToDir(dir, name, data).finally(() => {
+      inFlight.delete(p);
+      inFlightBytes -= data.byteLength;
+    });
+    inFlight.add(p);
+  };
+
+  const dec = new TextDecoder();
+  const readStr = (buf, s, e) => {
+    let end = s;
+    while (end < e && buf[end] !== 0) end++;
+    return dec.decode(buf.subarray(s, end));
+  };
+
+  let state = 'header';
+  const hdrBuf = new Uint8Array(512);
+  let hdrLen = 0;
+  let fileBuf = null;
+  let filePos = 0;
+  let fileSize = 0;
+  let padRem = 0;
+  let curDir = base;
+  let curName = '';
+
+  const reader = r.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    updateProgress(value.length);
+    let off = 0;
+    while (off < value.length && state !== 'done') {
+      if (state === 'header') {
+        const take = Math.min(512 - hdrLen, value.length - off);
+        hdrBuf.set(value.subarray(off, off + take), hdrLen);
+        hdrLen += take;
+        off += take;
+        if (hdrLen < 512) continue;
+        hdrLen = 0;
+        let allZero = true;
+        for (let i = 0; i < 512; i++) {
+          if (hdrBuf[i] !== 0) { allZero = false; break; }
+        }
+        if (allZero) { state = 'done'; break; }
+        const name = readStr(hdrBuf, 0, 100);
+        const prefix = readStr(hdrBuf, 345, 500);
+        let rel = prefix ? `${prefix}/${name}` : name;
+        if (rel.startsWith('./')) rel = rel.slice(2);
+        const typeflag = hdrBuf[156];
+        fileSize = parseInt(readStr(hdrBuf, 124, 136).trim(), 8) || 0;
+        padRem = (512 - (fileSize % 512)) % 512;
+        if (typeflag === 53 || rel.endsWith('/')) {
+          await ensureDir(rel.replace(/\/+$/, ''));
+          continue;
+        }
+        const slash = rel.lastIndexOf('/');
+        curDir = await ensureDir(slash === -1 ? '' : rel.slice(0, slash));
+        curName = slash === -1 ? rel : rel.slice(slash + 1);
+        fileCount++;
+        if (fileSize === 0) {
+          await enqueueWrite(curDir, curName, new Uint8Array(0));
+        } else {
+          fileBuf = new Uint8Array(fileSize);
+          filePos = 0;
+          state = 'data';
+        }
+      } else if (state === 'data') {
+        const take = Math.min(fileSize - filePos, value.length - off);
+        fileBuf.set(value.subarray(off, off + take), filePos);
+        filePos += take;
+        off += take;
+        if (filePos === fileSize) {
+          const data = fileBuf;
+          fileBuf = null;
+          await enqueueWrite(curDir, curName, data);
+          state = padRem > 0 ? 'pad' : 'header';
+        }
+      } else if (state === 'pad') {
+        const take = Math.min(padRem, value.length - off);
+        padRem -= take;
+        off += take;
+        if (padRem === 0) state = 'header';
+      }
+    }
+  }
+
+  if (state === 'data' || state === 'pad' || hdrLen > 0) {
+    throw new Error('Incomplete game bundle stream');
+  }
+  await Promise.all(inFlight);
+
+  loadText.textContent = 'Finalizing game files…';
+  loadSub.textContent = '';
+  await finish(base);
+  log(`Cached ${fileCount} game files (${(doneBytes / 1e6).toFixed(0)} MB) in browser storage.`);
+}
+
+async function importManifest(base, loadText, loadBar, loadSub) {
+  setLoadPhase('Step 1/2 · Game Assets');
   const manifestResp = await fetchRetry('install/manifest.json', { cache: 'no-store' });
   const list = await manifestResp.json();
-  const base = await root();
   const files = list.files.filter(([p]) => !skip(p));
   const total = files.reduce((s, [, n]) => s + n, 0);
   await checkStorage(total);
 
-  // Pre-create all directories sequentially so parallel workers never race on getDirectoryHandle(..., { create: true }).
   const dirs = new Set();
   for (const [p] of files) {
     const parts = p.split('/');
@@ -170,22 +319,23 @@ async function importServer() {
     dirHandles.set(d, await parent.getDirectoryHandle(slash === -1 ? d : d.slice(slash + 1), { create: true }));
   }
 
-  loadText.textContent = 'Loading game files…';
+  loadText.textContent = 'Downloading & caching game files…';
   loadBar.value = 0;
   const start = performance.now();
   let done = 0;
+  const totalMB = (total / 1e6).toFixed(0);
 
   const updateProgress = (bytes) => {
     done += bytes;
     loadBar.value = total ? done / total : 1;
     const elapsed = (performance.now() - start) / 1000;
-    if (elapsed > 0.5 && done > 0) {
+    if (elapsed > 0.15 && done > 0) {
       const speed = done / elapsed;
       const left = Math.max(0, (total - done) / speed);
       const mb = (speed / 1e6).toFixed(1);
       const pct = total ? Math.floor((done / total) * 100) : 100;
       const eta = left < 60 ? `${Math.ceil(left)}s` : `${Math.floor(left / 60)}m ${Math.ceil(left % 60)}s`;
-      loadSub.textContent = `${pct}% · ${mb} MB/s — ${eta} left`;
+      loadSub.textContent = `${pct}% (${(done / 1e6).toFixed(0)} / ${totalMB} MB) · ${mb} MB/s — ${eta} left`;
     }
   };
 
@@ -207,13 +357,33 @@ async function importServer() {
   loadText.textContent = 'Finalizing game files…';
   loadSub.textContent = '';
   await finish(base);
-  log(`Loaded ${files.length} files (${(total / 1e6).toFixed(0)} MB) from the server.`);
+  log(`Cached ${files.length} game files (${totalMB} MB) in browser storage.`);
+}
+
+async function importServer() {
+  const loadText = $('load-text');
+  const loadBar = $('load-bar');
+  const loadSub = $('load-sub');
+  setLoadPhase('Step 1/2 · Game Assets');
+  loadText.textContent = 'Checking game files…';
+  loadBar.hidden = false;
+  loadBar.removeAttribute('value');
+  loadSub.textContent = '';
+
+  const base = await root();
+  try {
+    await importBundle(base, loadText, loadBar, loadSub);
+  } catch (e) {
+    if (e.message && e.message.startsWith('Insufficient browser storage')) throw e;
+    console.warn('[install] bundle.tar unavailable, falling back to manifest:', e);
+    await importManifest(base, loadText, loadBar, loadSub);
+  }
 }
 
 async function refresh() {
   const ok = await isComplete();
   $('play').hidden = !ok;
-  $('play').textContent = gameRunning ? 'Resume game' : 'Play';
+  $('play').textContent = gameRunning ? 'Resume Game (Esc)' : 'Play';
   $('saves-btn').hidden = !ok;
   $('import-rec').hidden = !ok;
   $('online').hidden = false;
@@ -224,14 +394,17 @@ async function refresh() {
       const r = await root();
       for await (const [n, h] of r.entries()) {
         if (h.kind !== 'directory' || n.toLowerCase() !== 'savegame') continue;
-        for await (const [sn] of h.entries()) if (sn.toLowerCase().endsWith('.mgl') || sn.toLowerCase().endsWith('.mgx')) saves++;
+        for await (const [sn] of h.entries()) {
+          const l = sn.toLowerCase();
+          if (l.endsWith('.mgl') || l.endsWith('.mgx') || l.endsWith('.mgz')) saves++;
+        }
       }
       $('save-count').textContent = saves ? `${saves} saved game${saves > 1 ? 's' : ''}` : '';
     } catch { /* no SaveGame dir yet */ }
     try {
       const { usage } = await navigator.storage.estimate();
       const usedMB = (usage / 1e6).toFixed(0);
-      $('storage-info').textContent = `${usedMB} MB used`;
+      $('storage-info').textContent = `${usedMB} MB cached`;
     } catch {}
   }
 }
@@ -275,20 +448,21 @@ async function showSaves() {
   if (!list.hidden) { list.hidden = true; return; }
   const files = await listSaves();
   list.replaceChildren();
-  if (!files.length) { list.textContent = 'No saved games yet.'; list.hidden = false; return; }
+  if (!files.length) { list.textContent = 'No saved games or recordings yet.'; list.hidden = false; return; }
   for (const f of files) {
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2a2a2a;font-size:13px';
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #252730;font-size:13px';
     const info = document.createElement('span');
-    info.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    info.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)';
     const sizeMB = (f.size / 1e6).toFixed(1);
     const date = new Date(f.modified);
     const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    info.textContent = `${f.name}  (${sizeMB} MB, ${dateStr})`;
-    info.style.color = 'var(--dim)';
+    info.textContent = `${f.name}  (${sizeMB} MB · ${dateStr})`;
+    const actions = document.createElement('span');
+    actions.style.cssText = 'display:flex;gap:4px';
     const dl = document.createElement('button');
     dl.textContent = 'Download';
-    dl.style.cssText = 'margin:0;padding:2px 8px;font-size:12px';
+    dl.style.cssText = 'margin:0;padding:3px 9px;font-size:12px';
     dl.onclick = async () => {
       const file = await f.handle.getFile();
       const url = URL.createObjectURL(file);
@@ -300,17 +474,18 @@ async function showSaves() {
     const del = document.createElement('button');
     del.textContent = '×';
     del.title = 'Delete ' + f.name;
-    del.style.cssText = 'margin:0 0 0 4px;padding:2px 6px;font-size:12px;color:var(--err);border-color:transparent;background:transparent';
+    del.style.cssText = 'margin:0;padding:3px 8px;font-size:12px;color:var(--err);border-color:transparent;background:transparent';
     del.onclick = async () => {
       const dir = await getSaveDir();
       if (!dir) return;
       await dir.removeEntry(f.name);
       row.remove();
       const remaining = list.querySelectorAll('div').length;
-      if (!remaining) { list.textContent = 'No saved games yet.'; }
-      $('save-count').textContent = remaining ? remaining + ' save' + (remaining > 1 ? 's' : '') : '';
+      if (!remaining) { list.textContent = 'No saved games or recordings yet.'; }
+      $('save-count').textContent = remaining ? `${remaining} saved game${remaining > 1 ? 's' : ''}` : '';
     };
-    row.append(info, dl, del);
+    actions.append(dl, del);
+    row.append(info, actions);
     list.append(row);
   }
   list.hidden = false;
@@ -326,6 +501,7 @@ async function importRecording() {
       const dir = await r.getDirectoryHandle('SaveGame', { create: true });
       await writeFileToDir(dir, file.name, file);
       log(`Imported recording: ${file.name}`);
+      toast(`Imported ${file.name}`);
       input.value = '';
       await refresh();
       resolve();
@@ -334,38 +510,140 @@ async function importRecording() {
   });
 }
 
+function initWebGL(canvas) {
+  const opts = { alpha: false, depth: false, stencil: false, antialias: false, preserveDrawingBuffer: false };
+  const gl = canvas.getContext('webgl2', opts) || canvas.getContext('webgl', opts);
+  if (!gl) return null;
+  const compile = (type, src) => {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) { gl.deleteShader(sh); return null; }
+    return sh;
+  };
+  const vs = compile(gl.VERTEX_SHADER,
+    'attribute vec2 aPos; varying vec2 vTex; void main(){ vTex = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5); gl_Position = vec4(aPos, 0.0, 1.0); }');
+  const fs = compile(gl.FRAGMENT_SHADER,
+    'precision mediump float; varying vec2 vTex; uniform sampler2D uTex; void main(){ gl_FragColor = texture2D(uTex, vTex); }');
+  if (!vs || !fs) return null;
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+  gl.useProgram(prog);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'aPos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+  let curW = 0, curH = 0, scratch = null;
+  return (src, w, h) => {
+    if (curW !== w || curH !== h) {
+      canvas.width = w; canvas.height = h;
+      gl.viewport(0, 0, w, h);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, w, h, 0, gl.RGB, gl.UNSIGNED_SHORT_5_6_5, null);
+      scratch = new Uint16Array(w * h);
+      curW = w; curH = h;
+    }
+    scratch.set(src);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RGB, gl.UNSIGNED_SHORT_5_6_5, scratch);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  };
+}
+
+let lastBox = null;
+function syncScreenRect() {
+  const sdl = $('canvas'), scr = $('screen');
+  if (!lastBox || !sdl || !scr) return;
+  const { dx, dy, dw, dh, cw, ch } = lastBox;
+  if (cw <= 0 || ch <= 0) return;
+  let r = sdl.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const w = Math.min(vw, (vh * 4) / 3);
+    const h = Math.min(vh, (vw * 3) / 4);
+    r = { left: (vw - w) / 2, top: (vh - h) / 2, width: w, height: h };
+  }
+  const sx = r.width / cw, sy = r.height / ch;
+  Object.assign(scr.style, {
+    left: `${r.left + dx * sx}px`,
+    top: `${r.top + dy * sy}px`,
+    width: `${dw * sx}px`,
+    height: `${dh * sy}px`,
+  });
+}
+window.addEventListener('resize', syncScreenRect);
+document.addEventListener('fullscreenchange', syncScreenRect);
+
 function presenter(module) {
-  const sdl = $('canvas'), scr = $('screen'), ctx = scr.getContext('2d');
+  const sdl = $('canvas'), scr = $('screen');
+  const glDraw = initWebGL(scr);
+  const ctx = glDraw ? null : scr.getContext('2d');
   let img = null, firstFrame = true;
   return {
     ra2Present(fb, w, h, dx, dy, dw, dh, mode, cw, ch) {
-      if (!img || img.width !== w || img.height !== h) { scr.width = w; scr.height = h; img = ctx.createImageData(w, h); }
-      const src = module.HEAPU16.subarray(fb >> 1, (fb >> 1) + w * h), out = new Uint32Array(img.data.buffer);
-      for (let i = 0; i < src.length; i++) {
-        const v = src[i], r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
-        out[i] = 0xFF000000 | (((b << 3) | (b >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((r << 3) | (r >> 2));
+      if (document.hidden && !firstFrame) return;
+      if (sdl.hidden) sdl.hidden = false;
+      const src = module.HEAPU16.subarray(fb >> 1, (fb >> 1) + w * h);
+      if (glDraw) {
+        glDraw(src, w, h);
+      } else {
+        if (!img || img.width !== w || img.height !== h) { scr.width = w; scr.height = h; img = ctx.createImageData(w, h); }
+        const out = new Uint32Array(img.data.buffer);
+        for (let i = 0; i < src.length; i++) {
+          const v = src[i], r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+          out[i] = 0xFF000000 | (((b << 3) | (b >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((r << 3) | (r >> 2));
+        }
+        ctx.putImageData(img, 0, 0);
       }
-      ctx.putImageData(img, 0, 0);
-      const r = sdl.getBoundingClientRect(), sx = r.width / cw, sy = r.height / ch;
-      Object.assign(scr.style, { left: `${r.left + dx * sx}px`, top: `${r.top + dy * sy}px`, width: `${dw * sx}px`, height: `${dh * sy}px` });
+      lastBox = { dx, dy, dw, dh, cw, ch };
+      syncScreenRect();
       scr.hidden = false;
       tickFps();
-      if (firstFrame) { $('loading').hidden = true; $('game-ui').hidden = false; fpsLast = performance.now(); firstFrame = false; }
+      if (firstFrame) {
+        $('loading').hidden = true;
+        $('game-ui').hidden = false;
+        fpsLast = performance.now();
+        firstFrame = false;
+        if ($('setup').hidden) sdl.focus();
+      }
     },
     ra2Menu(open) { scr.hidden = !!open; },
   };
 }
 
-// --- Audio context resume (browsers block autoplay) ---
+// --- Audio context resume & mute keep-alive (keeps Chromium active-audio tab exemption) ---
+function startSilentKeepAlive(ctx) {
+  if (ctx._keepAliveStarted || ctx.state !== 'running') return;
+  ctx._keepAliveStarted = true;
+  try {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    g.gain.value = 0;
+    osc.connect(g);
+    g.connect(ctx._realDestination || ctx.destination);
+    osc.start();
+  } catch {}
+}
+
 function resumeAudioContexts() {
-  if (muted) return;
-  if (typeof SDL === 'object' && SDL.audioContext && SDL.audioContext.state === 'suspended') {
-    SDL.audioContext.resume();
-  }
-  const ctxs = window._audioContexts;
-  if (Array.isArray(ctxs)) {
-    for (const ctx of ctxs) {
-      if (ctx.state === 'suspended') ctx.resume();
+  const all = [];
+  if (Array.isArray(window._audioContexts)) all.push(...window._audioContexts);
+  if (typeof SDL === 'object' && SDL.audioContext && !all.includes(SDL.audioContext)) all.push(SDL.audioContext);
+  for (const ctx of all) {
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => startSilentKeepAlive(ctx)).catch(() => {});
+    } else {
+      startSilentKeepAlive(ctx);
     }
   }
 }
@@ -378,6 +656,15 @@ if (OrigAudioContext) {
   const OrigCtor = OrigAudioContext;
   window.AudioContext = function (...args) {
     const ctx = new OrigCtor(...args);
+    try {
+      const realDest = ctx.destination;
+      const master = ctx.createGain();
+      master.gain.value = muted ? 0 : 1;
+      master.connect(realDest);
+      ctx._realDestination = realDest;
+      ctx._masterGain = master;
+      Object.defineProperty(ctx, 'destination', { get: () => master, configurable: true });
+    } catch {}
     window._audioContexts.push(ctx);
     return ctx;
   };
@@ -393,11 +680,17 @@ function toggleMute() {
   if (Array.isArray(window._audioContexts)) all.push(...window._audioContexts);
   if (typeof SDL === 'object' && SDL.audioContext && !all.includes(SDL.audioContext)) all.push(SDL.audioContext);
   for (const ctx of all) {
-    if (muted) ctx.suspend().catch(() => {});
-    else ctx.resume().catch(() => {});
+    if (ctx._masterGain) {
+      ctx._masterGain.gain.value = muted ? 0 : 1;
+    } else {
+      if (muted) ctx.suspend().catch(() => {});
+      else ctx.resume().catch(() => {});
+    }
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
   }
   $('mute-btn').textContent = muted ? '🔇' : '🔊';
-  $('mute-btn').title = muted ? 'Unmute (M)' : 'Mute (M)';
+  $('mute-btn').title = muted ? 'Unmute audio (Alt+M)' : 'Mute audio (Alt+M)';
+  toast(muted ? 'Audio muted' : 'Audio unmuted', 1500);
 }
 
 // --- Fullscreen ---
@@ -409,83 +702,245 @@ function toggleFullscreen() {
   }
 }
 
-const RELAY = location.port === '8642' ? `//${location.hostname}:8643/relay` : `//${location.host}/relay`;
-const relayUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + RELAY;
-const roomsUrl = location.protocol + RELAY + '/rooms';
+let serverConfig = { install: true, relay_same_origin: null, relay_ws_url: '' };
+let serverWasmSize = 43 * 1e6;
+
+function resolveRelayWsUrl() {
+  if (serverConfig.relay_ws_url) return serverConfig.relay_ws_url;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  if (serverConfig.relay_same_origin === true || !location.port || location.port === '80' || location.port === '443') {
+    return `${proto}//${location.host}/relay`;
+  }
+  return `${proto}//${location.hostname}:8643/relay`;
+}
+
+async function fetchRelay(subpath, timeoutMs = 5000) {
+  try {
+    const r = await fetch('relay' + subpath, { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+    if (r.ok || r.status < 500) return r;
+  } catch {}
+  if (serverConfig.relay_same_origin !== true && location.port === '8642') {
+    return fetch(`${location.protocol}//${location.hostname}:8643/relay${subpath}`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  }
+  throw new Error('Relay unavailable');
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {}
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
 
 // --- Connection status ---
 let relayOk = false;
 let consecutiveFails = 0;
 
-function setStatus(ok, text) {
+function setStatus(ok, text, onlinePlayers = 0, openRooms = 0) {
   const el = $('status');
   el.textContent = text;
   el.className = ok ? 'ok' : 'err';
   relayOk = ok;
   $('rooms').classList.toggle('dimmed', !ok);
+
+  const dot = $('hud-online-dot');
+  const label = $('hud-online-label');
+  if (dot) dot.className = ok ? 'ok' : 'err';
+  if (label) {
+    const count = onlinePlayers || openRooms;
+    label.textContent = ok && count > 0 ? `Online (${count})` : 'Online';
+  }
 }
 
 const playerName = () => ($('player').value.trim() || 'Player').slice(0, 15);
+
+function updateInviteBanner(rooms) {
+  const banner = $('invite-banner');
+  const urlEl = $('invite-url');
+  if (!banner || !urlEl) return;
+  let targetRoom = null;
+  if (hostedRoom && Array.isArray(rooms)) {
+    targetRoom = rooms.find((r) => r.name === hostedRoom);
+  }
+  if (!targetRoom && Array.isArray(rooms) && rooms.length === 1 && rooms[0].open) {
+    targetRoom = rooms[0];
+  }
+  if (targetRoom) {
+    const u = new URL(location.href);
+    u.search = `?join=${targetRoom.id}&room=${encodeURIComponent(targetRoom.name)}`;
+    urlEl.textContent = u.toString();
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+  }
+}
+
+function checkHostedRoomJoins(rooms) {
+  if (!hostedRoom || !Array.isArray(rooms)) return;
+  const mine = rooms.find((r) => r.name === hostedRoom);
+  if (mine) {
+    for (const p of mine.players) {
+      if (!knownPlayers.has(p)) notifyJoin(p);
+    }
+    knownPlayers = new Set(mine.players);
+  }
+}
+
+function renderChat(chat) {
+  const box = $('chat-messages');
+  const key = JSON.stringify(chat);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.replaceChildren();
+  if (!chat.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:var(--dim);padding:4px 0';
+    empty.textContent = 'Lobby chat is ready — say hi or coordinate a match.';
+    box.append(empty);
+    return;
+  }
+  for (const m of chat) {
+    const line = document.createElement('div');
+    line.style.padding = '2px 0';
+    const timeStr = new Date((m.ts || 0) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const ts = document.createElement('span');
+    ts.style.color = '#6e6c66';
+    ts.textContent = `[${timeStr}] `;
+    const who = document.createElement('strong');
+    who.style.color = 'var(--accent)';
+    who.textContent = m.from;
+    line.append(ts, who, document.createTextNode(`: ${m.text}`));
+    box.append(line);
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendChat() {
+  const input = $('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  try {
+    const qs = `?from=${encodeURIComponent(playerName())}&text=${encodeURIComponent(text)}`;
+    const r = await fetchRelay('/chat' + qs, 5000);
+    if (r.ok) {
+      const data = await r.json();
+      if (data.chat) renderChat(data.chat);
+    } else {
+      throw new Error('HTTP ' + r.status);
+    }
+  } catch (e) { log('Chat send failed: ' + (e.message || e)); }
+}
 
 async function listRooms() {
   if ($('setup').hidden) return;
   let rooms = [];
   try {
     const t0 = performance.now();
-    const r = await fetch(roomsUrl, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+    const r = await fetchRelay('/rooms', 5000);
     if (!r.ok) throw new Error(r.status);
-    rooms = (await r.json()).rooms;
+    const data = await r.json();
+    rooms = data.rooms || [];
+    if (data.chat) renderChat(data.chat);
     const ping = Math.round(performance.now() - t0);
     const wasOffline = consecutiveFails >= 2;
     consecutiveFails = 0;
     pollBackoff = POLL_MIN;
-    const total = rooms.reduce((s, r) => s + r.players.length, 0);
-    setStatus(true, total ? `${total} online · ${ping}ms` : `connected · ${ping}ms`);
+    const totalPlayers = rooms.reduce((s, rm) => s + rm.players.length, 0);
+    setStatus(true, totalPlayers ? `${totalPlayers} online · ${ping}ms` : `connected · ${ping}ms`, totalPlayers, rooms.length);
     if (wasOffline) log('Reconnected to the game server.');
   } catch {
     consecutiveFails++;
     pollBackoff = Math.min(pollBackoff * 1.5, POLL_MAX);
     if (consecutiveFails >= 2) setStatus(false, 'offline');
-    $('rooms').textContent = 'Cannot reach the game server.';
+    $('rooms').innerHTML = '<div class="rooms-empty">Cannot reach the multiplayer relay server.</div>';
     return;
   }
-  if (hostedRoom) {
-    const mine = rooms.find((r) => r.name === hostedRoom);
-    if (mine) {
-      for (const p of mine.players) {
-        if (!knownPlayers.has(p)) { notifyJoin(p); }
-      }
-      knownPlayers = new Set(mine.players);
-    }
-  }
+
+  checkHostedRoomJoins(rooms);
+  updateInviteBanner(rooms);
+
   const box = $('rooms'), key = JSON.stringify(rooms) + $('play').hidden;
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.replaceChildren();
-  if (!rooms.length) { box.textContent = 'No games yet — host one.'; return; }
+  if (!rooms.length) {
+    const empty = document.createElement('div');
+    empty.className = 'rooms-empty';
+    empty.textContent = 'No open games right now — enter a room name above and click "Host a game".';
+    box.append(empty);
+    return;
+  }
   for (const r of rooms) {
     const row = document.createElement('div');
     row.className = 'room';
     row.setAttribute('role', 'listitem');
-    const info = document.createElement('span');
-    info.textContent = `${r.name} — ${r.players.length}/${r.max} (${r.players.join(', ')})${r.open ? '' : ' · playing'}`;
+
+    const main = document.createElement('div');
+    main.className = 'room-main';
+
+    const title = document.createElement('span');
+    title.className = 'room-title';
+    title.textContent = (r.password ? '🔒 ' : '') + r.name;
+
+    const maxPlayers = Math.min(8, r.max || 8);
+    const countBadge = document.createElement('span');
+    countBadge.className = 'room-badge ' + (r.open ? 'open' : 'playing');
+    countBadge.textContent = `${r.players.length}/${maxPlayers} · ${r.open ? 'Waiting' : 'In Progress'}`;
+
+    const players = document.createElement('span');
+    players.className = 'room-players';
+    players.textContent = r.players.length ? `(${r.players.join(', ')})` : '';
+
+    main.append(title, countBadge, players);
+
     const actions = document.createElement('span');
     actions.style.display = 'flex';
-    actions.style.gap = '4px';
+    actions.style.gap = '6px';
+
     const b = document.createElement('button');
+    b.className = r.open ? 'primary' : '';
     b.textContent = 'Join';
-    b.disabled = !r.open || r.players.length >= r.max || $('play').hidden;
+    b.style.padding = '5px 12px';
+    b.disabled = !r.open || r.players.length >= maxPlayers || $('play').hidden;
     b.onclick = () => play({ lobby: 'join:' + r.id, room: r.name });
+
     const link = document.createElement('button');
-    link.textContent = 'Link';
-    link.title = 'Copy invite link';
-    link.onclick = () => {
+    link.textContent = 'Copy Link';
+    link.style.padding = '5px 10px';
+    link.title = 'Copy direct invite link to clipboard';
+    link.onclick = async () => {
       const u = new URL(location.href);
       u.search = `?join=${r.id}&room=${encodeURIComponent(r.name)}`;
-      navigator.clipboard.writeText(u.toString()).then(() => { link.textContent = 'Copied!'; setTimeout(() => { link.textContent = 'Link'; }, 1500); });
+      if (await copyToClipboard(u.toString())) {
+        link.textContent = 'Copied!';
+        toast('Invite link copied to clipboard');
+        setTimeout(() => { link.textContent = 'Copy Link'; }, 1500);
+      } else {
+        toast('Copy failed — copy the URL manually', 3000);
+      }
     };
+
     actions.append(b, link);
-    row.append(info, actions);
+    row.append(main, actions);
     box.append(row);
   }
 }
@@ -530,18 +985,25 @@ let gameRunning = false;
 let hostedRoom = null;
 let knownPlayers = new Set();
 let pingInterval = null;
+let buildVersion = '';
 
 async function measurePing() {
   try {
     const t0 = performance.now();
-    const r = await fetch(roomsUrl, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+    const r = await fetchRelay('/rooms', 3000);
     if (!r.ok) return;
-    await r.text();
+    const data = await r.json();
     const ms = Math.round(performance.now() - t0);
     const el = $('ping');
     el.textContent = ms + ' ms';
-    el.style.color = ms < 100 ? 'rgba(100,255,100,0.5)' : ms < 250 ? 'rgba(255,200,80,0.5)' : 'rgba(255,80,80,0.6)';
-  } catch { $('ping').textContent = ''; }
+    el.style.color = ms < 100 ? '#74e888' : ms < 250 ? '#f0c25b' : '#f26d6d';
+    const rooms = data.rooms || [];
+    const totalPlayers = rooms.reduce((s, rm) => s + rm.players.length, 0);
+    setStatus(true, totalPlayers ? `${totalPlayers} online · ${ms}ms` : `connected · ${ms}ms`, totalPlayers, rooms.length);
+    checkHostedRoomJoins(rooms);
+  } catch {
+    $('ping').textContent = '';
+  }
 }
 
 function startPingPolling() {
@@ -560,13 +1022,13 @@ function toast(msg, duration) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'toast';
-    el.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:35;background:rgba(0,0,0,0.85);color:#ddd;padding:8px 20px;border-radius:6px;font-size:14px;pointer-events:none;transition:opacity 0.3s;opacity:0';
+    el.style.cssText = 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:40;background:rgba(16,17,22,0.92);border:1px solid rgba(212,173,83,0.4);color:#ece8de;padding:8px 18px;border-radius:999px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,0.6);pointer-events:none;transition:opacity 0.25s;opacity:0';
     document.body.appendChild(el);
   }
   el.textContent = msg;
   el.style.opacity = '1';
   clearTimeout(el._timer);
-  el._timer = setTimeout(() => { el.style.opacity = '0'; }, duration || 3000);
+  el._timer = setTimeout(() => { el.style.opacity = '0'; }, duration || 2800);
 }
 
 // --- Online/offline events during gameplay ---
@@ -608,12 +1070,13 @@ let gameStartTime = 0;
 let timerInterval = null;
 function startGameTimer() {
   gameStartTime = Date.now();
+  if (timerInterval) clearInterval(timerInterval);
   timerInterval = setInterval(() => {
     const s = Math.floor((Date.now() - gameStartTime) / 1000);
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
-    $('game-timer').textContent = h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
+    $('game-timer').textContent = h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
   }, 1000);
 }
 function stopGameTimer() {
@@ -621,14 +1084,43 @@ function stopGameTimer() {
   $('game-timer').textContent = '';
 }
 
+function playJoinTone() {
+  if (muted || !OrigAudioContext) return;
+  try {
+    const existing = (window._audioContexts || []).find((c) => c.state === 'running');
+    const ctx = existing || new OrigAudioContext();
+    const dest = ctx._realDestination || ctx.destination;
+    const playTone = () => {
+      const t = ctx.currentTime;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.08, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      g.connect(dest);
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(523.25, t);
+      o.frequency.setValueAtTime(659.25, t + 0.12);
+      o.connect(g);
+      o.start(t);
+      o.stop(t + 0.3);
+      if (!existing) setTimeout(() => ctx.close().catch(() => {}), 450);
+    };
+    if (ctx.state === 'suspended') ctx.resume().then(playTone).catch(() => {});
+    else playTone();
+  } catch {}
+}
+
 function notifyJoin(name) {
-  if (Notification.permission !== 'granted') return;
-  try { new Notification('Player joined', { body: name + ' joined your game', icon: 'icon-192.png', tag: 'join-' + name }); } catch {}
+  playJoinTone();
+  toast(`${name} joined your game!`);
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    try { new Notification('Player joined', { body: name + ' joined your game', icon: 'icon-192.png', tag: 'join-' + name }); } catch {}
+  }
 }
 
 function openOnline() {
   if (!$('setup').hidden) return;
-  $('play').textContent = gameRunning ? 'Resume game' : 'Play';
+  $('play').textContent = gameRunning ? 'Resume Game (Esc)' : 'Play';
   $('setup').hidden = false;
   refresh();
   startRoomPolling();
@@ -638,7 +1130,11 @@ function closeOnline() {
   if ($('setup').hidden) return;
   $('setup').hidden = true;
   stopRoomPolling();
-  if (gameRunning) $('canvas').focus();
+  if (gameRunning) {
+    $('canvas').hidden = false;
+    syncScreenRect();
+    $('canvas').focus();
+  }
 }
 
 function returnToLobby(msg) {
@@ -664,10 +1160,14 @@ function returnToLobby(msg) {
 
 async function play(launch) {
   if (gameRunning) {
+    if (!launch || !launch.lobby) {
+      closeOnline();
+      return;
+    }
     const u = new URL(location.href);
-    if (launch && launch.lobby === 'host') {
+    if (launch.lobby === 'host') {
       u.search = `?host=1&room=${encodeURIComponent(launch.room || '')}`;
-    } else if (launch && launch.lobby && launch.lobby.startsWith('join:')) {
+    } else if (launch.lobby.startsWith('join:')) {
       u.search = `?join=${encodeURIComponent(launch.lobby.slice(5))}&room=${encodeURIComponent(launch.room || '')}`;
     } else {
       u.search = '';
@@ -684,59 +1184,98 @@ async function play(launch) {
   stopRoomPolling();
   requestWakeLock();
   startGameTimer();
-  if (launch && launch.lobby) startPingPolling();
+  startPingPolling();
   $('setup').hidden = true;
   $('loading').hidden = false;
   const loadBar = $('load-bar');
   const loadText = $('load-text');
   const loadSub = $('load-sub');
+  setLoadPhase('Step 2/2 · Game Engine');
   loadBar.hidden = false;
   loadBar.value = 0;
   loadText.textContent = 'Starting the game…';
   loadSub.textContent = '';
   $('retry-btn').hidden = true;
   const canvas = $('canvas');
-  canvas.hidden = false; canvas.focus();
-  const wasmSize = 42 * 1e6;
+  canvas.hidden = false;
+  canvas.focus();
+  const verSuffix = buildVersion ? `?v=${encodeURIComponent(buildVersion)}` : '';
+  const wasmUrl = 'aoe2.wasm' + verSuffix;
+  const jsUrl = 'aoe2.js' + verSuffix;
+  const wasmSize = serverWasmSize || (43 * 1e6);
+  const debugTrace = new URLSearchParams(location.search).has('debug');
   const config = {
     canvas,
     arguments: [],
     instantiateWasm(imports, callback) {
-      loadText.textContent = 'Downloading game engine…';
+      loadText.textContent = 'Downloading WebAssembly engine…';
       loadSub.textContent = '';
-      fetch('aoe2.wasm')
-        .then((r) => {
+      fetch(wasmUrl)
+        .then(async (r) => {
           if (!r.ok) throw new Error('WASM fetch failed: ' + r.status);
-          const contentLength = parseInt(r.headers.get('content-length') || '0', 10) || wasmSize;
-          const reader = r.body.getReader();
-          const chunks = [];
+          const rawLen = parseInt(r.headers.get('x-raw-length') || '0', 10);
+          const contentLen = parseInt(r.headers.get('content-length') || '0', 10);
+          const isEncoded = Boolean(r.headers.get('content-encoding'));
+          const totalBytes = rawLen || (!isEncoded && contentLen ? contentLen : 0) || wasmSize;
+          const totalMB = (totalBytes / 1e6).toFixed(1);
           let received = 0;
-          const pump = () => reader.read().then(({ done, value }) => {
-            if (done) return;
-            chunks.push(value);
-            received += value.length;
-            loadBar.value = received / contentLength;
-            const mb = (received / 1e6).toFixed(0);
-            const totalMB = (contentLength / 1e6).toFixed(0);
-            loadSub.textContent = `${mb} / ${totalMB} MB`;
-            return pump();
-          });
-          return pump().then(() => {
-            const merged = new Uint8Array(received);
-            let off = 0;
-            for (const c of chunks) { merged.set(c, off); off += c.length; }
-            loadText.textContent = 'Compiling…';
-            loadSub.textContent = '';
-            return WebAssembly.instantiate(merged.buffer, imports);
-          });
+
+          if (WebAssembly.instantiateStreaming && r.body) {
+            const reader = r.body.getReader();
+            const progressStream = new ReadableStream({
+              async pull(controller) {
+                const { done, value } = await reader.read();
+                if (done) {
+                  loadBar.removeAttribute('value');
+                  loadText.textContent = 'Compiling WebAssembly…';
+                  loadSub.textContent = 'Preparing game runtime';
+                  controller.close();
+                  return;
+                }
+                received += value.length;
+                loadBar.value = Math.min(1, received / Math.max(totalBytes, received));
+                loadSub.textContent = `${(received / 1e6).toFixed(1)} / ${totalMB} MB`;
+                controller.enqueue(value);
+              },
+              cancel(reason) { return reader.cancel(reason); },
+            });
+            const streamedResp = new Response(progressStream, {
+              status: r.status,
+              statusText: r.statusText,
+              headers: { 'Content-Type': 'application/wasm' },
+            });
+            try {
+              return await WebAssembly.instantiateStreaming(streamedResp, imports);
+            } catch (streamErr) {
+              console.warn('[wasm] instantiateStreaming failed, falling back:', streamErr);
+              const fallback = await fetch(wasmUrl);
+              if (!fallback.ok) throw new Error('WASM fetch failed: ' + fallback.status);
+              const buf = await fallback.arrayBuffer();
+              loadBar.removeAttribute('value');
+              loadText.textContent = 'Compiling WebAssembly…';
+              loadSub.textContent = '';
+              return WebAssembly.instantiate(buf, imports);
+            }
+          }
+
+          const buf = await r.arrayBuffer();
+          loadBar.removeAttribute('value');
+          loadText.textContent = 'Compiling WebAssembly…';
+          loadSub.textContent = '';
+          return WebAssembly.instantiate(buf, imports);
         })
-        .then((result) => { callback(result.instance, result.module); })
+        .then((result) => {
+          loadBar.removeAttribute('value');
+          loadText.textContent = 'Launching Age of Empires II…';
+          loadSub.textContent = 'Mounting game files & starting engine…';
+          callback(result.instance, result.module);
+        })
         .catch((e) => { returnToLobby('Failed to load the game engine: ' + e.message); });
       return {};
     },
     preRun: [(m) => {
       m.ENV.AOE2_ACCEPT_EULA = '1';
-      m.ENV.AOE2_TRACE_VIDEO = '1';
+      if (debugTrace) m.ENV.AOE2_TRACE_VIDEO = '1';
       if (launch && launch.lobby) {
         m.ENV.AOE2_ARGS = 'LOBBY';
         m.ENV.AOE2_LOBBY = launch.lobby;
@@ -748,7 +1287,7 @@ async function play(launch) {
       if (!text) return;
       const m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
       if (m) {
-        loadBar.value = 1 - parseInt(m[2]) / parseInt(m[4]);
+        loadBar.value = 1 - parseInt(m[2], 10) / parseInt(m[4], 10);
         loadText.textContent = m[1].trim() || 'Loading…';
       } else {
         loadBar.removeAttribute('value');
@@ -756,26 +1295,74 @@ async function play(launch) {
       }
     },
     monitorRunDependencies(left) {
-      if (left === 0) { loadBar.value = 1; loadText.textContent = 'Starting…'; }
+      if (left === 0) {
+        loadBar.removeAttribute('value');
+        loadText.textContent = 'Launching Age of Empires II…';
+        loadSub.textContent = 'Initializing DirectDraw & audio…';
+      }
     },
-    relayUrl,
+    onExit(code) {
+      returnToLobby('The game exited' + (code ? ` (code ${code}).` : '.'));
+    },
+    onAbort(what) {
+      returnToLobby('The game stopped: ' + what);
+    },
+    relayUrl: resolveRelayWsUrl(),
     print: (t) => console.log(t),
     printErr: (t) => console.warn(t),
   };
   Object.assign(config, presenter(config));
-  const startWasm = () => AoE2(config).then(
-    () => returnToLobby('The game exited.'),
-    (e) => returnToLobby('The game stopped: ' + e)
+  const startWasm = () => AoE2(config).catch(
+    (e) => returnToLobby('The game stopped: ' + (e?.message || e))
   );
   if (typeof AoE2 === 'function') {
     startWasm();
   } else {
     const s = document.createElement('script');
-    s.src = 'aoe2.js';
+    s.src = jsUrl;
     s.onload = startWasm;
     s.onerror = () => returnToLobby('Failed to load the game engine. Try refreshing the page.');
     document.body.appendChild(s);
   }
+}
+
+async function syncBuildVersion() {
+  try {
+    const [verResp, meResp] = await Promise.all([
+      fetch('api/version', { cache: 'no-store' }),
+      fetch('api/me', { cache: 'no-store' }).catch(() => null),
+    ]);
+    if (meResp && meResp.ok) {
+      try {
+        const me = await meResp.json();
+        serverConfig = {
+          install: me.install !== false,
+          relay_same_origin: typeof me.relay_same_origin === 'boolean' ? me.relay_same_origin : null,
+          relay_ws_url: typeof me.relay_ws_url === 'string' ? me.relay_ws_url : '',
+        };
+      } catch {}
+    }
+    if (!verResp.ok) return;
+    const j = await verResp.json();
+    if (typeof j.wasm_size === 'number' && j.wasm_size > 0) {
+      serverWasmSize = j.wasm_size;
+    }
+    if (!j.version) return;
+    buildVersion = j.version;
+    $('version').textContent = 'v' + buildVersion;
+    const prev = localStorage.getItem('aoe2.version');
+    if (prev !== buildVersion) {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        reg?.active?.postMessage('update-cache');
+      }
+      localStorage.setItem('aoe2.version', buildVersion);
+    }
+  } catch {}
 }
 
 async function init() {
@@ -785,6 +1372,8 @@ async function init() {
     $('load-bar').hidden = true;
     return;
   }
+
+  await syncBuildVersion();
 
   const params = new URLSearchParams(location.search);
   const joinId = params.get('join');
@@ -808,6 +1397,15 @@ async function init() {
   const complete = (await isComplete()) && Boolean(exe) && !(await exeProblem(exe));
 
   if (!complete) {
+    if (serverConfig.install === false) {
+      setLoadPhase('Setup Required');
+      $('load-text').textContent = 'Server has no preloaded game files configured';
+      $('load-sub').textContent = 'Configure AOE2_INSTALL_DIR to serve the Age of Empires II install files.';
+      $('load-bar').hidden = true;
+      $('retry-btn').hidden = false;
+      log('Server install disabled and no cached files in OPFS.');
+      return;
+    }
     try {
       await importServer();
     } catch (e) {
@@ -821,12 +1419,16 @@ async function init() {
   }
 
   const link = document.createElement('link');
-  link.rel = 'preload'; link.href = 'aoe2.wasm'; link.as = 'fetch'; link.crossOrigin = '';
+  link.rel = 'preload';
+  link.href = 'aoe2.wasm' + (buildVersion ? `?v=${encodeURIComponent(buildVersion)}` : '');
+  link.as = 'fetch';
+  link.crossOrigin = '';
   document.head.appendChild(link);
   await refresh();
   await play(launch);
 }
 
+// --- UI Event Listeners ---
 $('online-btn').onclick = () => { if ($('setup').hidden) openOnline(); else closeOnline(); };
 $('play').onclick = () => { if (gameRunning) closeOnline(); else play(); };
 $('host').onclick = () => {
@@ -836,23 +1438,27 @@ $('host').onclick = () => {
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
   play({ lobby: 'host', room });
 };
+$('refresh-rooms').onclick = () => { listRooms(); };
+$('copy-invite').onclick = async () => {
+  const u = $('invite-url').textContent;
+  if (!u) return;
+  if (await copyToClipboard(u)) {
+    $('copy-invite').textContent = 'Copied!';
+    toast('Invite link copied to clipboard');
+    setTimeout(() => { $('copy-invite').textContent = 'Copy Invite Link'; }, 1500);
+  } else {
+    toast('Copy failed — copy the URL manually', 3000);
+  }
+};
 $('retry-btn').onclick = () => location.reload();
+$('chat-send').onclick = sendChat;
 $('saves-btn').onclick = showSaves;
 $('import-rec').onclick = importRecording;
 $('mute-btn').onclick = toggleMute;
 $('fullscreen-btn').onclick = toggleFullscreen;
+$('hud-help-btn').onclick = () => { $('help-overlay').hidden = false; $('help-close').focus(); };
 $('canvas').addEventListener('contextmenu', (e) => e.preventDefault());
 $('setup').onclick = (e) => { if (gameRunning && e.target === $('setup')) closeOnline(); };
-for (const evt of ['keydown', 'keyup', 'keypress']) {
-  $('setup').addEventListener(evt, (e) => {
-    if (!gameRunning) return;
-    if (evt === 'keydown' && e.key === 'Escape' && $('help-overlay').hidden) {
-      e.preventDefault();
-      closeOnline();
-    }
-    e.stopPropagation();
-  });
-}
 $('help-link').onclick = (e) => { e.preventDefault(); $('help-overlay').hidden = false; $('help-close').focus(); };
 $('clear-cache').onclick = async (e) => {
   e.preventDefault();
@@ -870,31 +1476,87 @@ $('clear-cache').onclick = async (e) => {
     setTimeout(() => location.reload(), 500);
   } catch (err) { log('Failed to clear cache: ' + err.message); }
 };
-$('help-close').onclick = () => { $('help-overlay').hidden = true; $('help-link').focus(); };
-$('help-overlay').onclick = (e) => { if (e.target === $('help-overlay')) { $('help-overlay').hidden = true; $('help-link').focus(); } };
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !$('help-overlay').hidden) { $('help-overlay').hidden = true; return; }
-  if (e.key === 'Escape' && gameRunning && !$('setup').hidden) { closeOnline(); return; }
-  if (e.key === 'F11' && $('setup').hidden) { e.preventDefault(); toggleFullscreen(); }
-  if ((e.key === 'm' || e.key === 'M') && $('setup').hidden && !e.ctrlKey && !e.altKey && !e.metaKey) toggleMute();
-});
+$('help-close').onclick = () => {
+  $('help-overlay').hidden = true;
+  if ($('setup').hidden && gameRunning) $('canvas').focus(); else $('help-link').focus();
+};
+$('help-overlay').onclick = (e) => {
+  if (e.target === $('help-overlay')) {
+    $('help-overlay').hidden = true;
+    if ($('setup').hidden && gameRunning) $('canvas').focus(); else $('help-link').focus();
+  }
+};
+
+// Capture-phase keyboard handler registered BEFORE aoe2.js loads so SDL2's
+// window capture listener never steals keystrokes when #setup or #help-overlay is open.
+window.addEventListener('keydown', (e) => {
+  if (!$('help-overlay').hidden) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      $('help-overlay').hidden = true;
+      if ($('setup').hidden && gameRunning) $('canvas').focus();
+    }
+    e.stopImmediatePropagation();
+    return;
+  }
+  if (!$('setup').hidden) {
+    if (e.key === 'Escape' && gameRunning) {
+      e.preventDefault();
+      closeOnline();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (e.key === 'Enter' && e.target === $('chat-input')) {
+      e.preventDefault();
+      sendChat();
+      e.stopImmediatePropagation();
+      return;
+    }
+    e.stopImmediatePropagation();
+    return;
+  }
+  // In-game shortcuts (when overlays are hidden)
+  const tag = e.target?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (e.key === 'F11') {
+    e.preventDefault();
+    toggleFullscreen();
+    e.stopImmediatePropagation();
+    return;
+  }
+  if (e.altKey && (e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    toggleMute();
+    e.stopImmediatePropagation();
+  }
+}, true);
+
+for (const evt of ['keyup', 'keypress']) {
+  window.addEventListener(evt, (e) => {
+    if (!$('help-overlay').hidden || !$('setup').hidden) {
+      e.stopImmediatePropagation();
+    }
+  }, true);
+}
+
 try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
 $('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
 try { $('roomname').value = localStorage.getItem('aoe2.room') || ''; } catch {}
 $('roomname').oninput = () => { try { localStorage.setItem('aoe2.room', $('roomname').value); } catch {} };
+
 if ('serviceWorker' in navigator) {
+  const hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.register('sw.js').then((reg) => {
     reg.addEventListener('updatefound', () => {
       const nw = reg.installing;
       if (!nw) return;
       nw.addEventListener('statechange', () => {
-        if (nw.state === 'activated' && navigator.serviceWorker.controller) log('Update available — refresh the page for the latest version.');
+        if (nw.state === 'activated' && hadController) {
+          log('Update available — refresh the page for the latest version.');
+        }
       });
     });
   }).catch(() => {});
 }
 navigator.storage.persist?.();
-fetch('api/version', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
-  if (j.version) $('version').textContent = j.version;
-}).catch(() => {});
 init();

@@ -5,64 +5,568 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="description" content="Age of Empires II: The Conquerors, recompiled to run directly in the browser.">
 <meta name="theme-color" content="#c9a24a">
-<meta property="og:title" content="Age of Empires II — browser build">
-<meta property="og:description" content="Age of Empires II: The Conquerors 1.0, recompiled to WebAssembly. Play directly in your browser.">
+<meta property="og:title" content="Age of Empires II: The Conquerors — Browser Edition">
+<meta property="og:description" content="Age of Empires II: The Conquerors 1.0, statically recompiled to WebAssembly. Instant play & online multiplayer in your browser.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="icon-512.png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="manifest" href="manifest.json">
-<title>Age of Empires II: The Conquerors (recompiled)</title>
+<title>Age of Empires II: The Conquerors</title>
 <style>
-  :root { color-scheme: dark; --bg: #111; --fg: #ddd; --dim: #888; --accent: #c9a24a; --err: #e45; --ok: #5b5; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
-  #setup { position: fixed; inset: 0; z-index: 25; background: rgba(17, 17, 17, 0.92); overflow: auto; padding: 6vh 16px; }
-  #setup[hidden] { display: none; }
-  #setup-panel { max-width: 640px; margin: 0 auto; background: #181818; border: 1px solid #333; border-radius: 8px; padding: 20px 24px; }
-  h1 { font-size: 20px; color: var(--accent); margin: 0 0 12px; }
-  p { color: var(--dim); }
-  button { font: inherit; padding: 8px 14px; margin: 4px 8px 4px 0; background: #2a2a2a; color: var(--fg); border: 1px solid #444; border-radius: 4px; cursor: pointer; transition: border-color 0.15s; }
-  button:hover:not(:disabled) { border-color: var(--accent); }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  button[hidden] { display: none; }
-  h2 { font-size: 16px; color: var(--accent); margin: 24px 0 4px; }
-  input { font: inherit; padding: 6px 8px; background: #1b1b1b; color: var(--fg); border: 1px solid #444; border-radius: 4px; }
-  .room { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid #2a2a2a; }
-  .room span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #log { white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace; color: var(--dim); max-height: 30vh; overflow: auto; margin-top: 12px; }
-  progress { width: 100%; accent-color: var(--accent); }
-  #canvas { display: block; margin: 0 auto; background: #000; outline: none; max-width: 100vw; max-height: 100vh; touch-action: none; }
-  #screen { position: fixed; pointer-events: none; image-rendering: pixelated; }
+  :root {
+    color-scheme: dark;
+    --bg: #0b0b0d;
+    --panel: rgba(20, 20, 24, 0.94);
+    --card: #18191e;
+    --card-alt: #131418;
+    --border: #2c2e37;
+    --border-gold: rgba(201, 162, 74, 0.42);
+    --fg: #ece8de;
+    --dim: #96938a;
+    --accent: #d4ad53;
+    --accent-bright: #ecc76b;
+    --accent-dark: #8e6d24;
+    --err: #ee5555;
+    --ok: #52c468;
+    --warn: #e5a93c;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  /* --- Centered 4:3 Game Canvas & WebGL Overlay --- */
+  #canvas {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(100vw, calc(100vh * 4 / 3));
+    height: min(100vh, calc(100vw * 3 / 4));
+    display: block;
+    background: #000;
+    outline: none;
+    touch-action: none;
+    z-index: 1;
+    box-shadow: 0 0 60px rgba(0, 0, 0, 0.9);
+  }
+  #screen {
+    position: fixed;
+    pointer-events: none;
+    image-rendering: pixelated;
+    z-index: 2;
+  }
   canvas[hidden] { display: none !important; }
-  #status { font-size: 12px; padding: 2px 8px; border-radius: 3px; display: inline-block; }
-  #status.ok { color: var(--ok); }
-  #status.err { color: var(--err); }
-  .dimmed { opacity: 0.5; pointer-events: none; }
-  #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg); color: var(--fg); font: 16px system-ui, sans-serif; z-index: 10; padding: 16px; text-align: center; }
-  #loading[hidden] { display: none; }
-  #loading progress { width: 260px; max-width: 80vw; }
-  #load-sub { font-size: 12px; color: var(--dim); min-height: 1.4em; }
-  .warn { background: #332200; border: 1px solid #664400; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #ffcc66; font-size: 13px; max-width: 520px; }
-  #game-ui { position: fixed; top: 8px; right: 8px; z-index: 20; display: flex; align-items: center; gap: 6px; }
-  #game-ui button { margin: 0; padding: 4px 10px; font-size: 13px; line-height: 20px; background: rgba(0,0,0,0.55); border-color: rgba(255,255,255,0.15); opacity: 0.45; transition: opacity 0.2s; }
-  #game-ui #fullscreen-btn { font-size: 16px; }
-  #game-ui button:hover { opacity: 1; border-color: var(--accent); }
-  #game-ui[hidden] { display: none; }
-  footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #2a2a2a; font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; align-items: center; }
+
+  /* --- Buttons & Inputs --- */
+  button {
+    font: 500 13px/1.3 system-ui, sans-serif;
+    padding: 8px 14px;
+    background: #23252d;
+    color: var(--fg);
+    border: 1px solid #3c3f4c;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  button:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: #2b2d37;
+    color: #fff;
+  }
+  button.primary {
+    background: linear-gradient(180deg, #d7b159 0%, #aa832d 100%);
+    color: #12100b;
+    border-color: #e6c675;
+    font-weight: 600;
+  }
+  button.primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #e5c16a 0%, #bd9336 100%);
+    border-color: #f5da8e;
+    color: #000;
+  }
+  button:disabled { opacity: 0.42; cursor: not-allowed; }
+  button[hidden], [hidden] { display: none !important; }
+
+  input {
+    font: inherit;
+    padding: 7px 11px;
+    background: #121317;
+    color: var(--fg);
+    border: 1px solid #383a46;
+    border-radius: 6px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input:focus { border-color: var(--accent); }
+
+  /* --- Loading Screen (classic.minecraft.net / play-cs style) --- */
+  #loading {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: radial-gradient(circle at 50% 35%, #1d1a14 0%, #0b0b0d 72%);
+    text-align: center;
+  }
+  .load-card {
+    width: 100%;
+    max-width: 440px;
+    background: rgba(20, 20, 24, 0.88);
+    border: 1px solid var(--border-gold);
+    border-radius: 12px;
+    padding: 28px 28px 22px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+  }
+  .brand-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .brand-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(201, 162, 74, 0.25);
+  }
+  .brand-title {
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--accent-bright);
+    margin: 0;
+  }
+  .brand-sub {
+    font-size: 12px;
+    color: var(--dim);
+    margin: -4px 0 0;
+  }
+  #load-phase {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    background: rgba(212, 173, 83, 0.12);
+    border: 1px solid rgba(212, 173, 83, 0.28);
+    padding: 2px 10px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+  }
+  #load-text {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--fg);
+    margin-bottom: 12px;
+  }
+  progress {
+    width: 100%;
+    height: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    accent-color: var(--accent);
+    background: #141519;
+    border: 1px solid #2e303a;
+  }
+  progress::-webkit-progress-bar { background: #141519; border-radius: 999px; }
+  progress::-webkit-progress-value {
+    background: linear-gradient(90deg, #a67c27, #e4be64);
+    border-radius: 999px;
+    transition: width 0.15s ease;
+  }
+  #load-sub {
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+    color: var(--dim);
+    min-height: 1.5em;
+    margin-top: 8px;
+  }
+  .load-tips {
+    margin-top: 18px;
+    padding-top: 12px;
+    border-top: 1px solid #25262e;
+    font-size: 12px;
+    color: var(--dim);
+  }
+  .load-tips kbd {
+    background: #23252d;
+    border: 1px solid #3c3f4c;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font: 11px ui-monospace, monospace;
+    color: var(--fg);
+  }
+  .warn {
+    background: rgba(70, 44, 0, 0.75);
+    border: 1px solid #996300;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 0 0 14px;
+    color: #ffd480;
+    font-size: 13px;
+    text-align: left;
+  }
+
+  /* --- Floating In-Game Top-Right HUD (#game-ui) --- */
+  #game-ui {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: rgba(14, 15, 19, 0.82);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(212, 173, 83, 0.32);
+    border-radius: 999px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+    opacity: 0.82;
+    transition: opacity 0.2s ease, border-color 0.2s ease;
+  }
+  #game-ui:hover {
+    opacity: 1;
+    border-color: var(--accent);
+  }
+  .hud-metric {
+    font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+    color: #b8b5ad;
+    padding: 2px 5px;
+    user-select: none;
+  }
+  .hud-metric:empty { display: none; }
+  #game-ui button {
+    margin: 0;
+    padding: 4px 10px;
+    font-size: 12px;
+    line-height: 18px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    color: var(--fg);
+  }
+  #game-ui button:hover {
+    background: rgba(212, 173, 83, 0.18);
+    border-color: var(--accent);
+  }
+  #hud-online-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--dim);
+    display: inline-block;
+  }
+  #hud-online-dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  #hud-online-dot.err { background: var(--err); }
+
+  /* --- Online Lobby & Server Browser Modal (#setup) --- */
+  #setup {
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    background: rgba(8, 9, 12, 0.78);
+    backdrop-filter: blur(6px);
+    overflow: auto;
+    padding: 4vh 16px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  #setup-panel {
+    width: 100%;
+    max-width: 720px;
+    margin: auto;
+    background: var(--panel);
+    border: 1px solid var(--border-gold);
+    border-radius: 12px;
+    padding: 22px 26px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75);
+  }
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .panel-brand img {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--accent-bright);
+    margin: 0;
+  }
+  .panel-sub {
+    font-size: 12px;
+    color: var(--dim);
+    margin: 0;
+  }
+  #actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+  }
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 20px 0 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  #status {
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 10px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #1b1c22;
+    border: 1px solid #31333e;
+  }
+  #status::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--dim);
+  }
+  #status.ok { color: var(--ok); border-color: rgba(82, 196, 104, 0.35); }
+  #status.ok::before { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  #status.err { color: var(--err); border-color: rgba(238, 85, 85, 0.35); }
+  #status.err::before { background: var(--err); }
+
+  /* --- Host / Profile Controls --- */
+  .host-bar {
+    display: grid;
+    grid-template-columns: 160px 1fr auto auto;
+    gap: 8px;
+    align-items: center;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .field-label {
+    font-size: 11px;
+    color: var(--dim);
+    font-weight: 500;
+  }
+  .host-bar input { width: 100%; }
+
+  /* --- Invite Banner (classic.minecraft.net style) --- */
+  #invite-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(212, 173, 83, 0.1);
+    border: 1px solid var(--border-gold);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-size: 12px;
+  }
+  #invite-url {
+    font: 12px ui-monospace, monospace;
+    color: var(--accent-bright);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    user-select: all;
+  }
+
+  /* --- Server Browser Rooms List --- */
+  #rooms {
+    background: var(--card-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-height: 68px;
+    max-height: 220px;
+    overflow: auto;
+    padding: 4px 10px;
+  }
+  .rooms-empty {
+    padding: 18px 8px;
+    text-align: center;
+    color: var(--dim);
+    font-size: 13px;
+  }
+  .room {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 4px;
+    border-bottom: 1px solid #22242c;
+  }
+  .room:last-child { border-bottom: none; }
+  .room-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+  .room-title {
+    font-weight: 600;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .room-badge {
+    font: 11px/1.2 ui-monospace, monospace;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #23252f;
+    color: var(--dim);
+    border: 1px solid #353846;
+  }
+  .room-badge.open {
+    color: var(--ok);
+    border-color: rgba(82, 196, 104, 0.35);
+    background: rgba(82, 196, 104, 0.08);
+  }
+  .room-badge.playing {
+    color: var(--warn);
+    border-color: rgba(229, 169, 60, 0.35);
+    background: rgba(229, 169, 60, 0.08);
+  }
+  .room-players {
+    font-size: 12px;
+    color: var(--dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dimmed { opacity: 0.55; }
+
+  /* --- Lobby Chat --- */
+  #lobby-chat { margin-top: 14px; }
+  #chat-messages {
+    height: 115px;
+    overflow: auto;
+    background: var(--card-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  .chat-row {
+    display: flex;
+    gap: 8px;
+  }
+  .chat-row input { flex: 1; min-width: 0; }
+
+  #log {
+    white-space: pre-wrap;
+    font: 12px/1.4 ui-monospace, monospace;
+    color: var(--dim);
+    max-height: 12vh;
+    overflow: auto;
+    margin-top: 10px;
+  }
+  #log:empty { display: none; }
+
+  footer {
+    margin-top: 18px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--dim);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
   footer a { color: var(--dim); text-decoration: none; }
   footer a:hover { color: var(--accent); }
-  #help-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 30; display: flex; align-items: center; justify-content: center; }
-  #help-overlay[hidden] { display: none; }
-  #help-box { background: #1b1b1b; border: 1px solid #444; border-radius: 8px; padding: 20px 28px; max-width: 400px; width: 90%; }
-  #help-box h3 { color: var(--accent); margin: 0 0 12px; font-size: 16px; }
-  #help-box dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; }
-  #help-box dt { color: var(--fg); font: 13px ui-monospace, monospace; }
+
+  /* --- Help / Keyboard Shortcuts Modal --- */
+  #help-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(4px);
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  #help-box {
+    background: #18191f;
+    border: 1px solid var(--border-gold);
+    border-radius: 12px;
+    padding: 22px 26px;
+    max-width: 440px;
+    width: 100%;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+  }
+  #help-box h3 { color: var(--accent-bright); margin: 0 0 14px; font-size: 16px; }
+  #help-box dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: baseline; }
+  #help-box dt {
+    color: var(--fg);
+    font: 12px ui-monospace, monospace;
+    background: #23252d;
+    border: 1px solid #3c3f4c;
+    border-radius: 4px;
+    padding: 2px 7px;
+    text-align: center;
+  }
   #help-box dd { margin: 0; color: var(--dim); font-size: 13px; }
-  @media (max-width: 600px) {
-    #setup { padding: 3vh 12px; }
+
+  @media (max-width: 640px) {
+    #setup { padding: 2vh 10px; }
     #setup-panel { padding: 16px; }
-    h1 { font-size: 17px; }
+    .host-bar { grid-template-columns: 1fr; }
     .room { flex-wrap: wrap; }
   }
 </style>
@@ -70,56 +574,126 @@
 <body>
 <div id="setup" hidden>
   <div id="setup-panel">
-    <h1>Age of Empires II: The Conquerors</h1>
-    <div id="actions">
-      <button id="play">Play</button>
-      <button id="saves-btn" hidden>Saves</button>
-      <button id="import-rec" hidden title="Import a recorded game (.mgx)">Import recording</button>
-      <input type="file" id="rec-input" accept=".mgx,.mgl,.mgz" hidden>
-      <span id="save-count" style="font-size:12px;color:var(--dim);margin-left:4px"></span>
+    <div class="panel-header">
+      <div class="panel-brand">
+        <img src="icon.svg" alt="AoE2">
+        <div>
+          <h1>Age of Empires II: The Conquerors</h1>
+          <p class="panel-sub">WebAssembly Edition · DirectPlay Online Lobby</p>
+        </div>
+      </div>
+      <div id="actions" style="margin-top:0">
+        <button id="play" class="primary">Play</button>
+        <button id="saves-btn" hidden>Saves</button>
+        <button id="import-rec" hidden title="Import a recorded game or save (.mgx, .mgl, .mgz)">Import .mgx</button>
+        <input type="file" id="rec-input" accept=".mgx,.mgl,.mgz" hidden>
+        <span id="save-count" style="font-size:12px;color:var(--dim)"></span>
+      </div>
     </div>
-    <div id="saves-list" hidden style="margin:8px 0;max-height:200px;overflow:auto"></div>
+
+    <div id="saves-list" hidden style="margin:10px 0;padding:8px 12px;background:var(--card-alt);border:1px solid var(--border);border-radius:8px;max-height:180px;overflow:auto"></div>
+
     <section id="online">
-      <h2>Online <span id="status"></span></h2>
-      <p><label>Your name <input id="player" maxlength="15" placeholder="Player" autocomplete="off"></label></p>
-      <p><input id="roomname" maxlength="30" placeholder="Game name" autocomplete="off"> <button id="host">Host a game</button></p>
-      <div id="rooms" role="list">…</div>
+      <h2>
+        <span>Multiplayer Server Browser</span>
+        <span id="status">connecting…</span>
+      </h2>
+
+      <div id="invite-banner" hidden>
+        <span>Invite link:</span>
+        <span id="invite-url"></span>
+        <button id="copy-invite" style="padding:4px 10px;font-size:12px">Copy Invite Link</button>
+      </div>
+
+      <div class="host-bar">
+        <div class="field-group">
+          <label class="field-label" for="player">Your Name</label>
+          <input id="player" maxlength="15" placeholder="Player" autocomplete="off">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="roomname">Room Name</label>
+          <input id="roomname" maxlength="30" placeholder="My Conquerors Game" autocomplete="off">
+        </div>
+        <div class="field-group" style="justify-content:flex-end">
+          <span class="field-label">&nbsp;</span>
+          <button id="host" class="primary">Host a game</button>
+        </div>
+        <div class="field-group" style="justify-content:flex-end">
+          <span class="field-label">&nbsp;</span>
+          <button id="refresh-rooms" title="Refresh room list">↻</button>
+        </div>
+      </div>
+
+      <div id="rooms" role="list"><div class="rooms-empty">Checking active multiplayer rooms…</div></div>
+
+      <div id="lobby-chat">
+        <div id="chat-messages" role="log" aria-live="polite"></div>
+        <div class="chat-row">
+          <input id="chat-input" maxlength="160" placeholder="Type a message in lobby chat… (Enter to send)" autocomplete="off">
+          <button id="chat-send">Send</button>
+        </div>
+      </div>
     </section>
+
     <div id="log" role="log" aria-live="polite"></div>
+
     <footer>
       <span><span id="version"></span> <span id="storage-info" style="margin-left:8px"></span></span>
-      <span><a href="https://github.com/aesaganda/aoe2-on-browser/issues" target="_blank" rel="noopener" style="margin-right:12px">Report a bug</a><a href="#" id="clear-cache" style="color:var(--err);margin-right:12px">Clear cache</a><a href="#" id="help-link">Keyboard shortcuts</a></span>
+      <span>
+        <a href="https://github.com/aesaganda/aoe2-on-browser/issues" target="_blank" rel="noopener" style="margin-right:12px">Report a bug</a>
+        <a href="#" id="clear-cache" style="color:var(--err);margin-right:12px">Clear cache</a>
+        <a href="#" id="help-link">Keyboard shortcuts</a>
+      </span>
     </footer>
   </div>
 </div>
+
 <div id="loading">
-  <noscript><p style="color:var(--err)">This page needs JavaScript to run the game.</p></noscript>
-  <div id="compat-warn" hidden class="warn"></div>
-  <div id="load-text">Loading the game…</div>
-  <progress id="load-bar" max="1" value="0"></progress>
-  <div id="load-sub"></div>
-  <button id="retry-btn" hidden>Retry</button>
-</div>
-<div id="game-ui" hidden>
-  <span id="game-timer" style="font:11px ui-monospace,monospace;color:rgba(255,255,255,0.35);padding:2px 6px;user-select:none"></span>
-  <span id="fps" style="font:11px ui-monospace,monospace;color:rgba(255,255,255,0.35);padding:2px 6px;user-select:none"></span>
-  <span id="ping" style="font:11px ui-monospace,monospace;color:rgba(255,255,255,0.35);padding:2px 6px;user-select:none"></span>
-  <button id="mute-btn" title="Mute / unmute (M)">🔊</button>
-  <button id="online-btn" title="Online rooms">Online</button>
-  <button id="fullscreen-btn" title="Fullscreen (F11)">⛶</button>
-</div>
-<div id="help-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
-  <div id="help-box">
-    <h3 id="help-title">Keyboard shortcuts</h3>
-    <dl>
-      <dt>F11</dt><dd>Toggle fullscreen</dd>
-      <dt>M</dt><dd>Mute / unmute</dd>
-      <dt>Esc</dt><dd>Exit fullscreen / close overlay</dd>
-    </dl>
-    <p style="margin:12px 0 0;font-size:12px;color:var(--dim)">All standard Age of Empires II hotkeys work in-game.</p>
-    <button id="help-close" style="margin-top:12px">Close</button>
+  <div class="load-card">
+    <div class="brand-header">
+      <img class="brand-icon" src="icon.svg" alt="Age of Empires II">
+      <h2 class="brand-title">Age of Empires II: The Conquerors</h2>
+      <p class="brand-sub">Browser WebAssembly Edition</p>
+    </div>
+    <noscript><p style="color:var(--err)">This page needs JavaScript to run the game.</p></noscript>
+    <div id="compat-warn" hidden class="warn"></div>
+    <div id="load-phase">Initializing</div>
+    <div id="load-text">Loading the game…</div>
+    <progress id="load-bar" max="1" value="0"></progress>
+    <div id="load-sub"></div>
+    <button id="retry-btn" class="primary" hidden style="margin-top:12px">Retry</button>
+    <div class="load-tips">
+      <kbd>Esc</kbd> Skip intro / close lobby · <kbd>F11</kbd> Fullscreen · <kbd>F12</kbd> Scaling · <kbd>Alt+M</kbd> Mute
+    </div>
   </div>
 </div>
+
+<div id="game-ui" hidden>
+  <span id="game-timer" class="hud-metric"></span>
+  <span id="fps" class="hud-metric"></span>
+  <span id="ping" class="hud-metric"></span>
+  <button id="mute-btn" title="Mute / unmute audio (Alt+M)">🔊</button>
+  <button id="online-btn" title="Open multiplayer rooms & saves"><span id="hud-online-dot"></span> <span id="hud-online-label">Online</span></button>
+  <button id="hud-help-btn" title="Keyboard shortcuts">?</button>
+  <button id="fullscreen-btn" title="Toggle fullscreen (F11)">⛶</button>
+</div>
+
+<div id="help-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
+  <div id="help-box">
+    <h3 id="help-title">Keyboard Shortcuts & Controls</h3>
+    <dl>
+      <dt>F11 / Alt+Enter</dt><dd>Toggle fullscreen mode</dd>
+      <dt>F12</dt><dd>Cycle scaling filter (sharp / smooth / CRT / nearest / integer)</dd>
+      <dt>Alt+M</dt><dd>Mute / unmute game audio</dd>
+      <dt>Esc</dt><dd>Close lobby overlay / skip intro video / in-game menu</dd>
+      <dt>H / .</dt><dd>Select Town Center / cycle Idle Villager (in-game)</dd>
+      <dt>Enter</dt><dd>In-game multiplayer chat</dd>
+    </dl>
+    <p style="margin:14px 0 0;font-size:12px;color:var(--dim)">All standard Age of Empires II: The Conquerors hotkeys and control groups (Ctrl+1–9) work in-game.</p>
+    <button id="help-close" class="primary" style="margin-top:14px;width:100%">Close</button>
+  </div>
+</div>
+
 <canvas id="canvas" tabindex="0" hidden></canvas>
 <canvas id="screen" hidden></canvas>
 <script src="page.js"></script>

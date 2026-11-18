@@ -44,6 +44,7 @@ import os
 import signal
 import struct
 import time
+import urllib.parse
 
 import websockets
 
@@ -65,9 +66,12 @@ DPSESSION_PASSWORDREQUIRED = 0x400
 
 MAX_FRAME = 1 << 20          # 1 MiB — no legitimate DirectPlay message is larger
 MAX_CONNS = 200               # total simultaneous connections
+MAX_CONNS_PER_IP = 16         # per client IP simultaneous connections
 MAX_PLAYERS_PER_ROOM = 8
 MAX_ROOMS = 50
 ROOM_TTL = 7200               # seconds: empty rooms are cleaned up after this
+CHAT_RATE_LIMIT = 5           # max chat messages per client IP per window
+CHAT_RATE_WINDOW = 10.0       # seconds
 
 
 class Reader:
@@ -164,10 +168,14 @@ class Conn:
 
 
 class Relay:
-    def __init__(self):
+    def __init__(self, max_rooms=MAX_ROOMS):
         self.rooms = {}
         self.pids = itertools.count(0x10000 + (int.from_bytes(os.urandom(2), "little") << 8))
         self.conn_count = 0
+        self.ip_conns = {}
+        self.chat_log = []
+        self.chat_buckets = {}
+        self.max_rooms = max_rooms
         self._cleanup_task = None
 
     def start_cleanup(self):
@@ -209,7 +217,7 @@ class Relay:
             rooms = [x for x in self.rooms.values() if x.desc[24:40] == app or app == bytes(16)]
             return await self.reply(c, req, DP_OK, struct.pack("<I", len(rooms)) + b"".join(x.pack() for x in rooms))
         if t == CREATE:
-            if len(self.rooms) >= MAX_ROOMS:
+            if len(self.rooms) >= self.max_rooms:
                 return await self.reply(c, req, DPERR_GENERIC)
             await self.leave(c)
             desc, name, password = bytearray(r.raw(80)), r.str(), r.str()
@@ -336,49 +344,122 @@ class Relay:
             log.info("#%d %s: gone (%d remain)", c.n, c.peer, self.conn_count)
 
 
-async def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--ws-port", type=int, default=8643)
-    ap.add_argument("--tcp-port", type=int, default=8644)
-    a = ap.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    logging.getLogger("websockets").setLevel(logging.WARNING)
-    relay = Relay()
-    relay.start_cleanup()
+def _hdr_get(headers, key, default=""):
+    if not headers:
+        return default
+    v = headers.get(key)
+    if v is not None:
+        return v
+    kl = key.lower()
+    for k, val in headers.items():
+        if k.lower() == kl:
+            return val
+    return default
+
+
+def _client_ip_from_headers(headers, fallback):
+    xri = (_hdr_get(headers, "X-Real-IP") or "").strip()
+    if xri:
+        return xri
+    xff = (_hdr_get(headers, "X-Forwarded-For") or "").strip()
+    if xff:
+        first = xff.split(",", 1)[0].strip()
+        if first:
+            return first
+    if isinstance(fallback, tuple) and fallback:
+        return str(fallback[0])
+    return str(fallback) if fallback else "unknown"
+
+
+def _build_http_response(arg1, status, headers_list, body):
+    if isinstance(arg1, str):
+        return (status, headers_list, body)
+    import websockets.datastructures as ws_ds
+    import websockets.http11 as ws_http11
+    hdrs = ws_ds.Headers(headers_list)
+    if "Content-Length" not in hdrs:
+        hdrs["Content-Length"] = str(len(body))
+    return ws_http11.Response(int(status), status.phrase, hdrs, body)
+
+
+def create_relay_handlers(relay, max_conns=MAX_CONNS, max_conns_per_ip=MAX_CONNS_PER_IP):
+    json_headers = [
+        ("Content-Type", "application/json; charset=utf-8"),
+        ("Cache-Control", "no-store"),
+        ("Access-Control-Allow-Origin", "*"),
+        ("Cross-Origin-Resource-Policy", "cross-origin"),
+    ]
 
     async def ws_handler(ws, path=None):
-        if relay.conn_count >= MAX_CONNS:
+        req_headers = getattr(ws, "request_headers", None) or getattr(getattr(ws, "request", None), "headers", None)
+        client_ip = _client_ip_from_headers(req_headers, getattr(ws, "remote_address", None))
+        if relay.conn_count >= max_conns:
             await ws.close(1013, "server full")
             return
-        async def frames():
-            async for m in ws:
-                if isinstance(m, bytes):
-                    yield m
-        await relay.serve(Conn(ws.send, ws.remote_address), frames())
+        if relay.ip_conns.get(client_ip, 0) >= max_conns_per_ip:
+            await ws.close(1013, "too many connections")
+            return
+        relay.ip_conns[client_ip] = relay.ip_conns.get(client_ip, 0) + 1
+        try:
+            async def frames():
+                async for m in ws:
+                    if isinstance(m, bytes):
+                        yield m
+            await relay.serve(Conn(ws.send, client_ip), frames())
+        finally:
+            rem = relay.ip_conns.get(client_ip, 1) - 1
+            if rem <= 0:
+                relay.ip_conns.pop(client_ip, None)
+            else:
+                relay.ip_conns[client_ip] = rem
 
     async def tcp_handler(reader, writer):
-        if relay.conn_count >= MAX_CONNS:
+        peer = writer.get_extra_info("peername")
+        client_ip = peer[0] if isinstance(peer, tuple) and peer else str(peer or "unknown")
+        if relay.conn_count >= max_conns or relay.ip_conns.get(client_ip, 0) >= max_conns_per_ip:
             writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
             return
-        async def send(b):
-            writer.write(struct.pack("<I", len(b)) + b)
-            await writer.drain()
-        async def frames():
-            while True:
-                hdr = await reader.readexactly(4)
-                n, = struct.unpack("<I", hdr)
-                if n > MAX_FRAME:
-                    raise ValueError(f"frame too large: {n}")
-                yield await reader.readexactly(n)
-        await relay.serve(Conn(send, writer.get_extra_info("peername")), frames())
-        writer.close()
+        relay.ip_conns[client_ip] = relay.ip_conns.get(client_ip, 0) + 1
+        try:
+            async def send(b):
+                writer.write(struct.pack("<I", len(b)) + b)
+                await writer.drain()
+            async def frames():
+                while True:
+                    hdr = await reader.readexactly(4)
+                    n, = struct.unpack("<I", hdr)
+                    if n > MAX_FRAME:
+                        raise ValueError(f"frame too large: {n}")
+                    yield await reader.readexactly(n)
+            await relay.serve(Conn(send, peer), frames())
+        finally:
+            rem = relay.ip_conns.get(client_ip, 1) - 1
+            if rem <= 0:
+                relay.ip_conns.pop(client_ip, None)
+            else:
+                relay.ip_conns[client_ip] = rem
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
 
-    async def process_request(path, headers):
-        p = path.split("?")[0]
+    async def process_request(arg1, arg2):
+        if isinstance(arg1, str):
+            path, req_headers = arg1, arg2
+            fallback_ip = "local"
+        else:
+            path, req_headers = arg2.path, arg2.headers
+            fallback_ip = getattr(arg1, "remote_address", None)
+        parsed = urllib.parse.urlsplit(path)
+        p = parsed.path
         if p.endswith("/health"):
             body = json.dumps({"ok": True, "rooms": len(relay.rooms), "connections": relay.conn_count}).encode()
-            return (http.HTTPStatus.OK, [("Content-Type", "application/json"), ("Cache-Control", "no-store")], body)
+            return _build_http_response(arg1, http.HTTPStatus.OK, json_headers, body)
         if p.endswith("/stats"):
             now = time.monotonic()
             rooms_info = []
@@ -390,8 +471,27 @@ async def main():
                     "age_s": int(now - r.created),
                     "idle_s": int(now - r.last_active),
                 })
-            body = json.dumps({"connections": relay.conn_count, "rooms": rooms_info, "max_conns": MAX_CONNS, "max_rooms": MAX_ROOMS}).encode()
-            return (http.HTTPStatus.OK, [("Content-Type", "application/json"), ("Cache-Control", "no-store")], body)
+            body = json.dumps({"connections": relay.conn_count, "rooms": rooms_info, "max_conns": max_conns, "max_rooms": relay.max_rooms}).encode()
+            return _build_http_response(arg1, http.HTTPStatus.OK, json_headers, body)
+        if p.endswith("/chat"):
+            qs = urllib.parse.parse_qs(parsed.query)
+            sender = (qs.get("from", ["Player"])[0] or "Player").strip()[:15] or "Player"
+            text = (qs.get("text", [""])[0] or "").strip()[:160]
+            if text:
+                client_ip = _client_ip_from_headers(req_headers, fallback_ip)
+                now_mono = time.monotonic()
+                bucket = [ts for ts in relay.chat_buckets.get(client_ip, ()) if now_mono - ts < CHAT_RATE_WINDOW]
+                if len(bucket) >= CHAT_RATE_LIMIT:
+                    relay.chat_buckets[client_ip] = bucket
+                    body = json.dumps({"ok": False, "error": "rate_limited", "chat": relay.chat_log}).encode()
+                    return _build_http_response(arg1, http.HTTPStatus.TOO_MANY_REQUESTS, json_headers, body)
+                bucket.append(now_mono)
+                relay.chat_buckets[client_ip] = bucket
+                relay.chat_log.append({"from": sender, "text": text, "ts": int(time.time())})
+                if len(relay.chat_log) > 30:
+                    del relay.chat_log[:-30]
+            body = json.dumps({"ok": True, "chat": relay.chat_log}).encode()
+            return _build_http_response(arg1, http.HTTPStatus.OK, json_headers, body)
         if not p.endswith("/rooms"):
             return None
         rooms = []
@@ -400,24 +500,71 @@ async def main():
             rooms.append({
                 "id": r.instance.hex(), "name": r.name.decode("cp1252", "replace"),
                 "players": [p.short.decode("cp1252", "replace") for p in r.players.values()],
-                "max": r.max_players(), "open": not flags & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED),
+                "max": min(r.max_players(), MAX_PLAYERS_PER_ROOM), "open": not flags & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED),
                 "password": bool(r.password),
             })
-        body = json.dumps({"rooms": rooms}).encode()
-        return (http.HTTPStatus.OK, [("Content-Type", "application/json"), ("Cache-Control", "no-store"),
-                      ("Access-Control-Allow-Origin", "*"), ("Cross-Origin-Resource-Policy", "cross-origin")], body)
+        body = json.dumps({"rooms": rooms, "chat": relay.chat_log}).encode()
+        return _build_http_response(arg1, http.HTTPStatus.OK, json_headers, body)
+
+    return ws_handler, tcp_handler, process_request
+
+
+async def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--host", default=os.environ.get("AOE2_RELAY_HOST") or "127.0.0.1")
+    ap.add_argument("--ws-port", type=int, default=int(os.environ.get("AOE2_WS_PORT") or 8643))
+    ap.add_argument("--tcp-port", type=int, default=int(os.environ.get("AOE2_TCP_PORT") or 8644))
+    ap.add_argument("--max-conns", type=int, default=int(os.environ.get("AOE2_MAX_CONNS") or MAX_CONNS))
+    ap.add_argument("--max-conns-per-ip", type=int, default=int(os.environ.get("AOE2_MAX_CONNS_PER_IP") or MAX_CONNS_PER_IP))
+    ap.add_argument("--max-rooms", type=int, default=int(os.environ.get("AOE2_MAX_ROOMS") or MAX_ROOMS))
+    ap.add_argument("--no-watch", action="store_true", default=(os.environ.get("AOE2_NO_WATCH") == "1"))
+    a = ap.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    relay = Relay(max_rooms=a.max_rooms)
+    relay.start_cleanup()
+    ws_handler, tcp_handler, process_request = create_relay_handlers(
+        relay, max_conns=a.max_conns, max_conns_per_ip=a.max_conns_per_ip
+    )
 
     stop = asyncio.Event()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            pass
 
-    async with websockets.serve(ws_handler, a.host, a.ws_port, max_size=MAX_FRAME, process_request=process_request,
-                                ping_interval=20, ping_timeout=10):
-        tcp = await asyncio.start_server(tcp_handler, a.host, a.tcp_port)
-        log.info("relay: ws://%s:%d/relay (browser), tcp %s:%d (native)", a.host, a.ws_port, a.host, a.tcp_port)
-        async with tcp:
-            await stop.wait()
+    async def watch_self():
+        self_path = os.path.abspath(__file__)
+        try:
+            initial = os.stat(self_path).st_mtime
+        except OSError:
+            return
+        while not stop.is_set():
+            await asyncio.sleep(2)
+            try:
+                if os.stat(self_path).st_mtime != initial:
+                    log.info("relay.py modified on disk, restarting...")
+                    stop.set()
+                    return
+            except OSError:
+                pass
+
+    watch_task = asyncio.ensure_future(watch_self()) if not a.no_watch else None
+
+    try:
+        async with websockets.serve(ws_handler, a.host, a.ws_port, max_size=MAX_FRAME, process_request=process_request,
+                                    ping_interval=20, ping_timeout=10):
+            tcp = await asyncio.start_server(tcp_handler, a.host, a.tcp_port)
+            log.info("relay: ws://%s:%d/relay (browser), tcp %s:%d (native)", a.host, a.ws_port, a.host, a.tcp_port)
+            async with tcp:
+                await stop.wait()
+    finally:
+        for task in (relay._cleanup_task, watch_task):
+            if task and not task.done():
+                task.cancel()
+        await asyncio.gather(*(t for t in (relay._cleanup_task, watch_task) if t), return_exceptions=True)
     log.info("relay stopped")
 
 

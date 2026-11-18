@@ -1,0 +1,169 @@
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        AOE2_VERSION: "${AOE2_VERSION:-}"
+    image: aoe2-recomp-web:latest
+    command:
+      - python3
+      - /app/tools/net/relay.py
+      - --host
+      - 0.0.0.0
+      - --ws-port
+      - "8643"
+      - --tcp-port
+      - "8644"
+      - --no-watch
+    environment:
+      AOE2_MAX_CONNS: "${AOE2_MAX_CONNS:-200}"
+      AOE2_MAX_CONNS_PER_IP: "${AOE2_MAX_CONNS_PER_IP:-16}"
+      AOE2_MAX_ROOMS: "${AOE2_MAX_ROOMS:-50}"
+      AOE2_NO_WATCH: "1"
+    # Optional: expose native Win32/Linux C client TCP relay port
+    # ports:
+    #   - "${AOE2_TCP_BIND:-127.0.0.1}:${AOE2_TCP_PORT:-8644}:8644"
+    expose:
+      - "8643"
+      - "8644"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8643/health', timeout=2).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - aoe2-net
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        AOE2_VERSION: "${AOE2_VERSION:-}"
+    image: aoe2-recomp-web:latest
+    command:
+      - python3
+      - /app/tools/web/serve.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8642"
+      - --no-watch
+    environment:
+      AOE2_RELAY_URL: http://relay:8643
+      AOE2_RELAY_SAME_ORIGIN: "1"
+      AOE2_CACHE_DIR: /var/cache/aoe2
+      AOE2_WEB_DIR: /app/web
+      AOE2_BUILD_DIR: /app/build/web
+      AOE2_INSTALL_DIR: /app/install
+      AOE2_NO_INSTALL: "${AOE2_NO_INSTALL:-0}"
+      AOE2_OWNER: "${AOE2_OWNER:-}"
+      AOE2_VERSION: "${AOE2_VERSION:-}"
+      AOE2_NO_WATCH: "1"
+    volumes:
+      - "${AOE2_WEB_DIR:-./web}:/app/web:ro"
+      - "${AOE2_BUILD_DIR:-./build/web}:/app/build/web:ro"
+      - "${AOE2_INSTALL_DIR:-../aoe2-recomp-work/install}:/app/install:ro"
+      - aoe2-cache:/var/cache/aoe2
+    depends_on:
+      relay:
+        condition: service_healthy
+    expose:
+      - "8642"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=2).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - aoe2-net
+
+  gateway:
+    image: nginx:1.27-alpine
+    ports:
+      - "${AOE2_BIND:-127.0.0.1}:${AOE2_PORT:-8642}:80"
+    volumes:
+      - ./deploy/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+      - "${AOE2_WEB_DIR:-./web}:/srv/aoe2/web:ro"
+      - "${AOE2_BUILD_DIR:-./build/web}:/srv/aoe2/build:ro"
+    depends_on:
+      web:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,size=64m
+      - /run:rw,noexec,nosuid,size=4m
+      - /tmp:rw,noexec,nosuid,size=16m
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://127.0.0.1/health
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - aoe2-net
+
+volumes:
+  aoe2-cache:
+
+networks:
+  aoe2-net:
+    driver: bridge
