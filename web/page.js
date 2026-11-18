@@ -128,6 +128,20 @@ function progressTracker(total) {
   };
 }
 
+async function checkStorage(needed) {
+  if (!navigator.storage.estimate) return;
+  const { quota, usage } = await navigator.storage.estimate();
+  const free = quota - usage;
+  if (free < needed * 1.1) {
+    const freeMB = (free / 1e6).toFixed(0);
+    const needMB = (needed / 1e6).toFixed(0);
+    log(`Not enough storage: ${needMB} MB needed, only ${freeMB} MB available. Free up space or clear site data.`);
+    throw new Error('insufficient storage');
+  }
+}
+
+let installAbort = null;
+
 async function importFolder() {
   if (!window.showDirectoryPicker) { log('This browser cannot open a folder here; use Chrome or Edge.'); return; }
   const src = await window.showDirectoryPicker({ mode: 'read' });
@@ -144,14 +158,23 @@ async function importFolder() {
   let total = 0;
   const sized = [];
   for (const [p, h] of files) { const f = await h.getFile(); sized.push([p, f]); total += f.size; }
+  await checkStorage(total);
+  installAbort = new AbortController();
   $('bar').hidden = false;
+  $('cancel').hidden = false;
   const prog = progressTracker(total);
-  for (const [p, f] of sized) {
-    await writeFile(base, p, f);
-    prog.add(f.size);
+  try {
+    for (const [p, f] of sized) {
+      if (installAbort.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      await writeFile(base, p, f);
+      prog.add(f.size);
+    }
+  } finally {
+    prog.clear();
+    $('bar').hidden = true;
+    $('cancel').hidden = true;
+    installAbort = null;
   }
-  prog.clear();
-  $('bar').hidden = true;
   await finish(base);
   log(`Copied ${sized.length} files (${(total / 1e6).toFixed(0)} MB). Ready to play.`);
 }
@@ -161,16 +184,24 @@ async function importServer() {
   const base = await root();
   const files = list.files.filter(([p]) => !skip(p));
   const total = files.reduce((s, [, n]) => s + n, 0);
+  await checkStorage(total);
+  installAbort = new AbortController();
   $('bar').hidden = false;
+  $('cancel').hidden = false;
   const prog = progressTracker(total);
-  for (const [p, n] of files) {
-    const r = await fetch('install/' + p.split('/').map(encodeURIComponent).join('/'));
-    if (!r.ok) throw new Error(`${p}: ${r.status}`);
-    await writeFile(base, p, r.body);
-    prog.add(n);
+  try {
+    for (const [p, n] of files) {
+      const r = await fetch('install/' + p.split('/').map(encodeURIComponent).join('/'), { signal: installAbort.signal });
+      if (!r.ok) throw new Error(`${p}: ${r.status}`);
+      await writeFile(base, p, r.body);
+      prog.add(n);
+    }
+  } finally {
+    prog.clear();
+    $('bar').hidden = true;
+    $('cancel').hidden = true;
+    installAbort = null;
   }
-  prog.clear();
-  $('bar').hidden = true;
   await finish(base);
   log(`Copied ${files.length} files (${(total / 1e6).toFixed(0)} MB) from the server. Ready to play.`);
 }
@@ -380,7 +411,10 @@ async function play(launch) {
 
 const guard = (f) => async () => {
   for (const b of document.querySelectorAll('button')) b.disabled = true;
-  try { await f(); } catch (e) { log('Error: ' + e.message); console.error(e); }
+  try { await f(); } catch (e) {
+    if (e.name === 'AbortError') log('Cancelled.');
+    else { log('Error: ' + e.message); console.error(e); }
+  }
   for (const b of document.querySelectorAll('button')) b.disabled = false;
   await refresh();
 };
@@ -431,13 +465,14 @@ async function init() {
 $('pick').onclick = guard(importFolder);
 $('server').onclick = guard(importServer);
 $('forget').onclick = guard(forget);
+$('cancel').onclick = () => { if (installAbort) installAbort.abort(); };
 $('play').onclick = () => play();
 $('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
 $('fullscreen-btn').onclick = toggleFullscreen;
 $('canvas').addEventListener('contextmenu', (e) => e.preventDefault());
-$('help-link').onclick = (e) => { e.preventDefault(); $('help-overlay').hidden = false; };
-$('help-close').onclick = () => { $('help-overlay').hidden = true; };
-$('help-overlay').onclick = (e) => { if (e.target === $('help-overlay')) $('help-overlay').hidden = true; };
+$('help-link').onclick = (e) => { e.preventDefault(); $('help-overlay').hidden = false; $('help-close').focus(); };
+$('help-close').onclick = () => { $('help-overlay').hidden = true; $('help-link').focus(); };
+$('help-overlay').onclick = (e) => { if (e.target === $('help-overlay')) { $('help-overlay').hidden = true; $('help-link').focus(); } };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('help-overlay').hidden) { $('help-overlay').hidden = true; return; }
   if (e.key === 'F11' && $('setup').hidden) { e.preventDefault(); toggleFullscreen(); }

@@ -76,6 +76,7 @@
     <button id="server" hidden>Copy from this server</button>
     <button id="play" hidden>Play alone</button>
     <button id="forget" hidden>Remove the copy</button>
+    <button id="cancel" hidden>Cancel</button>
   </div>
   <section id="online" hidden>
     <h2>Online <span id="status"></span></h2>
@@ -98,9 +99,9 @@
 <div id="game-ui" hidden>
   <button id="fullscreen-btn" title="Fullscreen (F11)">⛶</button>
 </div>
-<div id="help-overlay" hidden>
+<div id="help-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
   <div id="help-box">
-    <h3>Keyboard shortcuts</h3>
+    <h3 id="help-title">Keyboard shortcuts</h3>
     <dl>
       <dt>F11</dt><dd>Toggle fullscreen</dd>
       <dt>Esc</dt><dd>Exit fullscreen</dd>
