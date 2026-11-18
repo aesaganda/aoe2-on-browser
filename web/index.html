@@ -31,6 +31,10 @@
   #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg); color: var(--dim); font: 16px system-ui, sans-serif; z-index: 10; }
   #loading progress { width: 200px; }
   .warn { background: #332200; border: 1px solid #664400; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #ffcc66; font-size: 13px; }
+  #game-ui { position: fixed; top: 8px; right: 8px; z-index: 20; display: flex; gap: 6px; }
+  #game-ui button { margin: 0; padding: 4px 10px; font-size: 18px; background: rgba(0,0,0,0.5); border-color: rgba(255,255,255,0.15); opacity: 0.3; transition: opacity 0.2s; }
+  #game-ui button:hover { opacity: 1; border-color: var(--accent); }
+  #game-ui[hidden] { display: none; }
   @media (max-width: 600px) {
     #setup { margin: 4vh auto; }
     h1 { font-size: 17px; }
@@ -63,8 +67,11 @@
   <div id="log" role="log" aria-live="polite"></div>
 </div>
 <div id="loading" hidden>
-  <div>Loading the game…</div>
+  <div id="load-text">Loading the game…</div>
   <progress id="load-bar" max="1" value="0"></progress>
+</div>
+<div id="game-ui" hidden>
+  <button id="fullscreen-btn" title="Fullscreen (F11)">⛶</button>
 </div>
 <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" hidden></canvas>
 <canvas id="screen" hidden></canvas>

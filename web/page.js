@@ -173,7 +173,7 @@ async function refresh() {
 
 function presenter(module) {
   const sdl = $('canvas'), scr = $('screen'), ctx = scr.getContext('2d');
-  let img = null;
+  let img = null, firstFrame = true;
   return {
     ra2Present(fb, w, h, dx, dy, dw, dh, mode, cw, ch) {
       if (!img || img.width !== w || img.height !== h) { scr.width = w; scr.height = h; img = ctx.createImageData(w, h); }
@@ -186,10 +186,19 @@ function presenter(module) {
       const r = sdl.getBoundingClientRect(), sx = r.width / cw, sy = r.height / ch;
       Object.assign(scr.style, { left: `${r.left + dx * sx}px`, top: `${r.top + dy * sy}px`, width: `${dw * sx}px`, height: `${dh * sy}px` });
       scr.hidden = false;
-      $('loading').hidden = true;
+      if (firstFrame) { $('loading').hidden = true; $('game-ui').hidden = false; firstFrame = false; }
     },
     ra2Menu(open) { scr.hidden = !!open; },
   };
+}
+
+// --- Fullscreen ---
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  } else {
+    document.documentElement.requestFullscreen().catch(() => {});
+  }
 }
 
 const RELAY = location.port === '8642' ? `//${location.hostname}:8643/relay` : `//${location.host}/relay`;
@@ -255,6 +264,17 @@ function stopRoomPolling() {
   if (roomInterval) { clearInterval(roomInterval); roomInterval = null; }
 }
 
+function returnToLobby(msg) {
+  $('loading').hidden = true;
+  $('game-ui').hidden = true;
+  $('canvas').hidden = true;
+  $('screen').hidden = true;
+  $('setup').hidden = false;
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  startRoomPolling();
+  if (msg) log(msg);
+}
+
 async function play(launch) {
   if (!crossOriginIsolated) { log('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
   if (!$('eula').checked) { log('Accept the license agreement first (the checkbox above).'); return; }
@@ -265,6 +285,9 @@ async function play(launch) {
   stopRoomPolling();
   $('setup').hidden = true;
   $('loading').hidden = false;
+  const loadBar = $('load-bar');
+  const loadText = $('load-text');
+  loadBar.value = 0;
   const canvas = $('canvas');
   canvas.hidden = false; canvas.focus();
   const s = document.createElement('script');
@@ -281,23 +304,30 @@ async function play(launch) {
         m.ENV.AOE2_PLAYER = playerName();
       }
     }],
+    setStatus(text) {
+      if (!text) return;
+      const m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+      if (m) {
+        loadBar.value = 1 - parseInt(m[2]) / parseInt(m[4]);
+        loadText.textContent = m[1].trim() || 'Loading…';
+      } else {
+        loadBar.removeAttribute('value');
+        loadText.textContent = text;
+      }
+    },
+    monitorRunDependencies(left) {
+      if (left === 0) { loadBar.value = 1; loadText.textContent = 'Starting…'; }
+    },
     relayUrl,
     print: (t) => console.log(t),
     printErr: (t) => console.warn(t),
   };
   Object.assign(config, presenter(config));
-  s.onload = () => AoE2(config).catch((e) => {
-    $('loading').hidden = true;
-    $('setup').hidden = false;
-    startRoomPolling();
-    log('The game stopped: ' + e);
-  });
-  s.onerror = () => {
-    $('loading').hidden = true;
-    $('setup').hidden = false;
-    startRoomPolling();
-    log('Failed to load the game engine. Try refreshing the page.');
-  };
+  s.onload = () => AoE2(config).then(
+    () => returnToLobby('The game exited.'),
+    (e) => returnToLobby('The game stopped: ' + e)
+  );
+  s.onerror = () => returnToLobby('Failed to load the game engine. Try refreshing the page.');
   document.body.appendChild(s);
 }
 
@@ -344,6 +374,10 @@ $('server').onclick = guard(importServer);
 $('forget').onclick = guard(forget);
 $('play').onclick = () => play();
 $('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
+$('fullscreen-btn').onclick = toggleFullscreen;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'F11' && $('setup').hidden) { e.preventDefault(); toggleFullscreen(); }
+});
 try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
 $('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
 navigator.storage.persist?.();
