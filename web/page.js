@@ -222,12 +222,14 @@ async function listRooms() {
   if ($('setup').hidden) return;
   let rooms = [];
   try {
+    const t0 = performance.now();
     const r = await fetch(roomsUrl, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
     if (!r.ok) throw new Error(r.status);
     rooms = (await r.json()).rooms;
+    const ping = Math.round(performance.now() - t0);
     consecutiveFails = 0;
     const total = rooms.reduce((s, r) => s + r.players.length, 0);
-    setStatus(true, total ? `${total} online` : 'connected');
+    setStatus(true, total ? `${total} online · ${ping}ms` : `connected · ${ping}ms`);
   } catch {
     consecutiveFails++;
     if (consecutiveFails >= 2) setStatus(false, 'offline');
@@ -245,11 +247,23 @@ async function listRooms() {
     row.setAttribute('role', 'listitem');
     const info = document.createElement('span');
     info.textContent = `${r.name} — ${r.players.length}/${r.max} (${r.players.join(', ')})${r.open ? '' : ' · playing'}`;
+    const actions = document.createElement('span');
+    actions.style.display = 'flex';
+    actions.style.gap = '4px';
     const b = document.createElement('button');
     b.textContent = 'Join';
     b.disabled = !r.open || r.players.length >= r.max || $('play').hidden;
     b.onclick = () => play({ lobby: 'join:' + r.id, room: r.name });
-    row.append(info, b);
+    const link = document.createElement('button');
+    link.textContent = 'Link';
+    link.title = 'Copy invite link';
+    link.onclick = () => {
+      const u = new URL(location.href);
+      u.search = `?join=${r.id}&room=${encodeURIComponent(r.name)}`;
+      navigator.clipboard.writeText(u.toString()).then(() => { link.textContent = 'Copied!'; setTimeout(() => { link.textContent = 'Link'; }, 1500); });
+    };
+    actions.append(b, link);
+    row.append(info, actions);
     box.append(row);
   }
 }
@@ -343,7 +357,19 @@ async function init() {
   checkCompat();
 
   const complete = await isComplete();
-  if (complete) { await refresh(); startRoomPolling(); return; }
+  if (complete) {
+    await refresh();
+    const params = new URLSearchParams(location.search);
+    const joinId = params.get('join');
+    if (joinId) {
+      history.replaceState(null, '', location.pathname);
+      log('Joining game from invite link…');
+      play({ lobby: 'join:' + joinId, room: params.get('room') || '' });
+      return;
+    }
+    startRoomPolling();
+    return;
+  }
 
   let me = { owner: false, install: false };
   try { me = await (await fetch('api/me', { cache: 'no-store' })).json(); } catch {}
