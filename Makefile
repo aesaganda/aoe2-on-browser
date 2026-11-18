@@ -68,7 +68,7 @@ native-trace: $(GEN_STAMP)
 # Phase 2: the browser build (emsdk's emcc on PATH) -> build/web/aoe2.js + aoe2.wasm;
 # serve with tools/web/serve.py (docs/phase2-web.md)
 web: $(GEN_STAMP)
-	$(MAKE) -f tools/web/web.mk -j$$(nproc)
+	$(MAKE) -f tools/web/web.mk -j$$(nproc) EXE=$(EXE)
 
 # Every leaf function (not just the 20 prototypes), 150 random states each: ~13 min on 20 cores.
 sweep: $(GEN_STAMP)

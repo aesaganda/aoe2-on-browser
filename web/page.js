@@ -6,8 +6,10 @@
 // mounts OPFS and runs the game from /opfs/aoe2 (src/web/web_fs.c).
 //
 // Not copied: the disc tree (the game only checks that a CD with the right label is
-// there: an empty cdrom/ and cdrom.label stand for it), the AVIs (the MPEG-1 copies
-// beside them are what plays, ADR-0004) and .cab archives.
+// there: an empty cdrom/ and cdrom.label stand for it), the AVIs and .cab archives.
+// The MPEG-1 copies beside the AVIs are what plays (ADR-0004), but the game plays a
+// video only if its .avi exists, so each copy gets an empty .avi beside it
+// (videoStandIns). An install without the copies plays no videos.
 'use strict';
 const $ = (id) => document.getElementById(id);
 const log = (s) => { $('log').textContent += s + '\n'; $('log').scrollTop = 1e9; };
@@ -35,7 +37,20 @@ async function writeFile(base, path, data) {           // data: a Blob, a File o
   if (data instanceof ReadableStream) await data.pipeTo(w); else { await w.write(data); await w.close(); }
 }
 
+async function videoStandIns(base) {                   // an empty x.avi for each x.mpg, in any folder
+  for await (const [, d] of base.entries()) {
+    if (d.kind !== 'directory') continue;
+    const names = [];
+    for await (const [n] of d.entries()) names.push(n);
+    const lower = new Set(names.map((n) => n.toLowerCase()));
+    for (const n of names)
+      if (n.toLowerCase().endsWith('.mpg') && !lower.has(n.slice(0, -4).toLowerCase() + '.avi'))
+        await (await (await d.getFileHandle(n.slice(0, -4) + '.avi', { create: true })).createWritable()).close();
+  }
+}
+
 async function finish(base) {
+  await videoStandIns(base);
   await base.getDirectoryHandle('cdrom', { create: true });
   await writeFile(base, 'cdrom.label', new Blob([DISC_LABEL + '\n']));
   await writeFile(base, MARK, new Blob([new Date().toISOString()]));
@@ -54,15 +69,41 @@ async function* walk(dir, prefix = '') {
   }
 }
 
+// The code on this page was lifted from one exact age2_x1.exe (build/web/aoe2.json,
+// written by make web): the same game, version 1.0. Another version's executable (a
+// patch such as 1.0c) does not match it and would crash, so it is refused up front.
+const EXE_PATH = 'age2_x1/age2_x1.exe';
+async function exeProblem(file) {
+  let want;
+  try { want = (await (await fetch('aoe2.json', { cache: 'no-store' })).json()).exe; } catch { return null; }
+  if (!want) return null;
+  if (file.size === want.size) {
+    const got = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()))]
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+    if (got === want.sha256) return null;
+  }
+  return `Your age2_x1.exe (${file.size} bytes) is not the one this build runs: it needs The Conquerors 1.0 as ` +
+         `installed from the disc, without patches (${want.size} bytes, SHA-256 ${want.sha256.slice(0, 12)}…).`;
+}
+async function copiedExe() {                            // the copy's age2_x1.exe, whatever its case
+  for await (const [n, d] of (await root()).entries())
+    if (d.kind === 'directory' && n.toLowerCase() === 'age2_x1')
+      for await (const [m, f] of d.entries()) if (f.kind === 'file' && m.toLowerCase() === 'age2_x1.exe') return f.getFile();
+  return null;
+}
+
 async function importFolder() {
   if (!window.showDirectoryPicker) { log('This browser cannot open a folder here; use Chrome or Edge.'); return; }
   const src = await window.showDirectoryPicker({ mode: 'read' });
   const files = [];
   for await (const [path, h] of walk(src)) if (!skip(path)) files.push([path, h]);
-  if (!files.some(([p]) => p.toLowerCase() === 'age2_x1/age2_x1.exe')) {
+  const exe = files.find(([p]) => p.toLowerCase() === EXE_PATH);
+  if (!exe) {
     log('That folder has no age2_x1\\age2_x1.exe: pick the folder the game is installed in.');
     return;
   }
+  const problem = await exeProblem(await exe[1].getFile());
+  if (problem) { log(problem + ' Nothing was copied.'); return; }
   const base = await root();
   let total = 0, done = 0;
   const sized = [];
@@ -169,6 +210,10 @@ setInterval(listRooms, 3000);
 async function play(launch) {
   if (!crossOriginIsolated) { log('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
   if (!$('eula').checked) { log('The game runs only once its license agreement is accepted (the checkbox above).'); return; }
+  const exe = await copiedExe().catch(() => null);
+  const problem = exe ? await exeProblem(exe) : 'The copy in this browser has no age2_x1\\age2_x1.exe.';
+  if (problem) { log(problem + ' Remove the copy and copy a matching install.'); return; }
+  await videoStandIns(await root()).catch(() => {});    // copies made before the stand-ins existed
   $('setup').hidden = true;
   const canvas = $('canvas');
   canvas.hidden = false; canvas.focus();

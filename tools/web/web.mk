@@ -12,7 +12,10 @@
 GEN     := build/lift/gen
 OBJ     := build/web/obj
 OUT     := build/web/aoe2.js
-.DEFAULT_GOAL := $(OUT)
+META    := build/web/aoe2.json
+EXE     ?= orig/age2_x1.exe
+.DEFAULT_GOAL := all
+all: $(OUT) $(META)
 PC_COPY := build/native/pcrecomp
 PC      := $(PC_COPY)/runtime
 PC_SRC  := third_party/pcrecomp
@@ -52,6 +55,12 @@ APP_OBJ := $(patsubst src/%.c,$(OBJ)/app/%.o,$(APP_SRC))
 
 $(OUT): $(GEN_OBJ) $(HLE_OBJ) $(APP_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)
+
+# Which age2_x1.exe this code was lifted from: the page checks a player's own copy
+# against it before copying their install (another version would not run).
+$(META): $(EXE)
+	@mkdir -p $(dir $@)
+	printf '{"exe": {"sha256": "%s", "size": %s}}\n' "$$(sha256sum $< | cut -d' ' -f1)" "$$(stat -c %s $<)" > $@
 
 $(OBJ)/gen/%.o: $(GEN)/%.c | $(PC_COPY)/.patched
 	@mkdir -p $(dir $@)
