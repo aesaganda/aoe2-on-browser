@@ -151,11 +151,26 @@ The command panels match the original. Town Center: Create Villager, Loom, Feuda
 | control: 1st checksum flipped (`mgx.py --corrupt 1`) | stopped at world time 40011 |
 | control: last checksum flipped (`--corrupt 4`) | out of sync at the last checksum |
 
-So the native build is deterministic against itself: a game it records replays to the same world checksums. That covers the simulation, the AI, the random numbers and file I/O on both paths. It does not yet compare the lifted code with the original. That needs a recording made by the original executable; the plan is the original under Wine, and is tracked under Open.
+So the native build is deterministic against itself: a game it records replays to the same world checksums. That covers the simulation, the AI, the random numbers and file I/O on both paths.
+
+**Against the original, under Wine.** Wine runs the game's own x86 code, so its recordings are the original's. The setup:
+- `tools/oracle/wine_setup.sh` builds a 32-bit Wine 9.0 prefix: E: is the install, D: the disc tree as a CD-ROM labelled `AGE2_X1` (`.windows-label`), plus the installer's registry keys. In the prefix, XRandR and XVidMode are off and wined3d uses its GDI renderer; with OpenGL, the game's X connection broke under Xvfb.
+- `wine_record.sh` plays a recorded game with the original (`NOSTARTUP`, since Wine has no Indeo codec).
+- `wine_replay_check.sh` replays a recording with the original, with gdb on the same two addresses in the real x86 code.
+
+Every run happens inside one invocation, because WSL ends a command's processes when the command ends, Wine's included.
+
+| Recorded by | Replayed by | Result |
+|---|---|---|
+| **original** (Wine; Standard Game, 2 computer players, 403 s, 213 commands) | **native** (`replay_check.sh`) | **in sync: 10 of 10 checksums** |
+| native (the 168 s game above) | original (Wine) | in sync: 4 of 4 |
+| control: native, last checksum flipped | original (Wine) | out of sync |
+
+The lifted build and the original executable compute the same world, checksum for checksum. That holds for 403 s of an AI game recorded by the original, and in both directions. The original accepted the EULA in its own dialog under Wine; the owner had already accepted it.
 
 Along the way: a recording's first int (header end) stays 0 until you leave the Achievements screen after a game. That is the original's own sequence: 0x426990 writes 0 at start and 0x426F90 patches it at close. It is not a host bug, but a recording copied before then does not load.
 
 ## Open
 
 - **Real DirectPlay:** Phase 3.
-- **Determinism against the original:** replay recordings made by the original `age2_x1.exe` (under Wine, or from the owner) with `tools/oracle/replay_check.sh`.
+- **Longer determinism runs:** a full game (an hour or more, all ages, combat), and recordings the owner makes on Windows, through the same `tools/oracle` scripts.
