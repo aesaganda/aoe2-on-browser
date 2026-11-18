@@ -1,0 +1,15 @@
+{
+  "name": "Age of Empires II: The Conquerors",
+  "short_name": "AoE2",
+  "description": "Age of Empires II: The Conquerors, recompiled to run in the browser.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#111111",
+  "theme_color": "#c9a24a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
