@@ -175,6 +175,7 @@ function presenter(module) {
       const r = sdl.getBoundingClientRect(), sx = r.width / cw, sy = r.height / ch;
       Object.assign(scr.style, { left: `${r.left + dx * sx}px`, top: `${r.top + dy * sy}px`, width: `${dw * sx}px`, height: `${dh * sy}px` });
       scr.hidden = false;
+      $('loading').hidden = true;
     },
     ra2Menu(open) { scr.hidden = !!open; },          // SDL draws the host's own menu (F10) itself
   };
@@ -222,6 +223,7 @@ async function play(launch) {
   if (problem) { log(problem + ' Remove the copy and copy a matching install.'); return; }
   await videoStandIns(await root()).catch(() => {});    // copies made before the stand-ins existed
   $('setup').hidden = true;
+  $('loading').hidden = false;
   const canvas = $('canvas');
   canvas.hidden = false; canvas.focus();
   const s = document.createElement('script');
@@ -243,7 +245,7 @@ async function play(launch) {
     printErr: (t) => console.warn(t),
   };
   Object.assign(config, presenter(config));             // the module object is this config
-  s.onload = () => AoE2(config).catch((e) => { $('setup').hidden = false; log('the game stopped: ' + e); });
+  s.onload = () => AoE2(config).catch((e) => { $('loading').hidden = true; $('setup').hidden = false; log('the game stopped: ' + e); });
   document.body.appendChild(s);
 }
 

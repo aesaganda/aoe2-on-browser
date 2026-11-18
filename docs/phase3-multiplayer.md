@@ -88,6 +88,13 @@ playing.
 
 Not checked yet: players on other machines across the tailnet.
 
+**Tailnet HTTP verification (2026-11-18):** All HTTP endpoints verified working
+through `https://ccenter.adal-shark.ts.net/` via curl: index.html 200 with correct
+COOP/COEP headers, `page.js` 200, `/api/me` returns `{"owner": true, "install": true}`
+for the owner's Tailscale login, `/relay/rooms` returns the room list. The in-app
+browser blocks `.ts.net` scripts (`ERR_BLOCKED_BY_CLIENT`), so the full page has not
+been tested there; a real Chrome on the tailnet should work.
+
 ## Friends' own installs
 
 Every player copies their own install into their browser with "Choose your install
