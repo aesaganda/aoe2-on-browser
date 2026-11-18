@@ -106,6 +106,16 @@ Not checked yet: players on other machines across the tailnet.
   connection count, age, idle time) for monitoring.
 - **Game timer**: a subtle elapsed-time counter in the top-right corner during
   gameplay.
+- **Audio context resume**: patches `AudioContext` to track all instances and
+  resumes suspended contexts on the first user gesture (click / keydown /
+  touchstart), so sound works even when the browser blocks autoplay.
+- **WASM download progress**: streams the 42 MB `aoe2.wasm` through
+  `instantiateWasm` with a progress bar (MB downloaded / total), then shows
+  "Compiling…" during `WebAssembly.instantiate`.
+- **Delete saves**: each save in the saves list has a delete button that removes
+  the file from OPFS.
+- **Join notifications**: when hosting, the page requests Notification permission
+  and shows a browser notification when a new player joins the game.
 
 **Tailnet HTTP verification (2026-11-18):** All HTTP endpoints verified working
 through `https://ccenter.adal-shark.ts.net/` via curl: index.html 200 with correct
