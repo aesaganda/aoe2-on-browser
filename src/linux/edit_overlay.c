@@ -18,12 +18,16 @@
 #include "ddraw_int.h"
 
 int hle_dd_frame(const uint8_t **px, int *w, int *h, int *pitch, int *bpp, const uint32_t **palette, unsigned *seq);
+int hle_dd_surface_pixels(uint32_t obj, uint8_t **px, int *w, int *h, int *pitch, int *bpp);
 extern void (*hle_dd_primary_hook)(void);
+extern int (*hle_screen_rgb_hook)(uint32_t *px, int w, int h);
 
 #define ES_PASSWORD 0x0020u
 #define FONT_PATH "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+#define GUEST_MOUSE_POINTER_GLOBAL 0x68CA24u
 
 static void (*g_next)(void);
+static int (*g_next_rgb)(uint32_t *px, int w, int h);
 static TTF_Font *g_font;
 static int g_busy;
 
@@ -87,6 +91,99 @@ static void overlay(void) {
     g_busy = 0;
 }
 
+static void draw_arrow_fallback(uint32_t *px, int w, int h, int mx, int my) {
+    /* 12x19 monochrome+ivory pointer (# border, . fill), hotspot at (0, 0). */
+    static const char *const rows[19] = {
+        "#",
+        "##",
+        "#.#",
+        "#..#",
+        "#...#",
+        "#....#",
+        "#.....#",
+        "#......#",
+        "#.......#",
+        "#........#",
+        "#.....#####",
+        "#..#..#",
+        "#.# #..#",
+        "##  #..#",
+        "#    #..#",
+        "     #..#",
+        "      #..#",
+        "      #..#",
+        "       ##",
+    };
+    for (int y = 0; y < 19; y++) {
+        int dy = my + y;
+        if (dy < 0 || dy >= h) continue;
+        const char *row = rows[y];
+        for (int x = 0; row[x]; x++) {
+            if (row[x] == ' ') continue;
+            int dx = mx + x;
+            if (dx < 0 || dx >= w) continue;
+            px[(size_t)dy * w + dx] = row[x] == '#' ? 0xFF000000u : 0xFFF4ECD8u;
+        }
+    }
+}
+
+/* Composite the game's mcursors.slp frame (or a fallback arrow) when TMousePointer
+ * is inactive so menus and dialogs show a cursor under SDL_ShowCursor(SDL_DISABLE). */
+static void draw_cursor_rgb(uint32_t *px, int w, int h) {
+    int mx = 0, my = 0;
+    hle_input_position(&mx, &my);
+    uint32_t mp = MEM32(GUEST_MOUSE_POINTER_GLOBAL);
+    if (mp && MEM32(mp + 0x140) == 1) {
+        int in_game = MEM32(mp + 0x144) != 0 && MEM32(mp + 0x148) != 0;
+        uint32_t facet = in_game ? MEM32(mp + 0x98) : MEM32(mp + 0x94);
+        int cw = (int)MEM32(mp + (in_game ? 0x7Cu : 0x74u));
+        int ch = (int)MEM32(mp + (in_game ? 0x80u : 0x78u));
+        int hx = (int)MEM32(mp + (in_game ? 0xB8u : 0xA8u));
+        int hy = (int)MEM32(mp + (in_game ? 0xB4u : 0xA4u));
+        uint32_t count = MEM32(mp + 0x10);
+        if (facet >= count || facet >= 19) facet = 0;
+        uint32_t area = MEM32(mp + 0x18 + facet * 4);
+        uint32_t surf = area ? MEM32(area + 0x3C) : 0;
+        uint8_t *spx = NULL;
+        int sw = 0, sh = 0, spitch = 0, sbpp = 0;
+        const uint8_t *fpx = NULL;
+        int fw = 0, fh = 0, fpitch = 0, fbpp = 0;
+        const uint32_t *pal = NULL;
+        if (surf && hle_dd_surface_pixels(surf, &spx, &sw, &sh, &spitch, &sbpp) &&
+            hle_dd_frame(&fpx, &fw, &fh, &fpitch, &fbpp, &pal, NULL) &&
+            spx && sbpp == 8 && pal && cw > 0 && ch > 0) {
+            if (cw > sw) cw = sw;
+            if (ch > sh) ch = sh;
+            for (int y = 0; y < ch; y++) {
+                int dy = my - hy + y;
+                if (dy < 0 || dy >= h) continue;
+                const uint8_t *src_row = spx + (size_t)y * spitch;
+                uint32_t *dst_row = px + (size_t)dy * w;
+                for (int x = 0; x < cw; x++) {
+                    uint8_t idx = src_row[x];
+                    if (idx == 0) continue;
+                    int dx = mx - hx + x;
+                    if (dx < 0 || dx >= w) continue;
+                    uint32_t e = pal[idx];
+                    dst_row[dx] = 0xFF000000u | ((e & 0xFFu) << 16) | (e & 0xFF00u) | ((e >> 16) & 0xFFu);
+                }
+            }
+            return;
+        }
+    }
+    draw_arrow_fallback(px, w, h, mx, my);
+}
+
+static int rgb_hook(uint32_t *px, int w, int h) {
+    if (g_next_rgb && g_next_rgb(px, w, h)) return 1;
+    uint32_t mp = MEM32(GUEST_MOUSE_POINTER_GLOBAL);
+    int mp_drew = mp && MEM32(mp) != 0 && MEM32(mp + 0x134) != 0 && MEM32(mp + 0x138) != 0;
+    if (mp_drew || !hle_cursor_shown()) return 0;
+    if (!px) return 1;
+    draw_cursor_rgb(px, w, h);
+    return 1;
+}
+
 static void hook(void) {
     overlay();
     if (g_next) g_next();
@@ -94,9 +191,12 @@ static void hook(void) {
 
 /* After hle_screen_open, which installs the presenter's hook that this one chains. */
 void edit_overlay_install(void) {
+    hle_input_cursor(400, 300);
+    g_next = hle_dd_primary_hook;
+    hle_dd_primary_hook = hook;
+    g_next_rgb = hle_screen_rgb_hook;
+    hle_screen_rgb_hook = rgb_hook;
     if (!TTF_WasInit() && TTF_Init() != 0) { fprintf(stderr, "[edit-overlay] TTF_Init: %s\n", TTF_GetError()); return; }
     g_font = TTF_OpenFont(FONT_PATH, 13);
     if (!g_font) { fprintf(stderr, "[edit-overlay] %s: %s\n", FONT_PATH, TTF_GetError()); return; }
-    g_next = hle_dd_primary_hook;
-    hle_dd_primary_hook = hook;
 }

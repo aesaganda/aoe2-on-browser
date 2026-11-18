@@ -1,0 +1,14 @@
+--- a/runtime/win32hle/ddraw.c
++++ b/runtime/win32hle/ddraw.c
+@@ -32,9 +32,9 @@
+ #define DDERR_UNSUPPORTED       0x80004001u
+ #define DDERR_NOTFOUND          0x887600FFu
+ #define DDERR_NOPALETTEATTACHED 0x8876023Cu
+-#define DDERR_NOCLIPPERATTACHED 0x88760082u
++#define DDERR_NOCLIPPERATTACHED 0x88760238u
+ #define DDERR_NOCOLORKEY        0x887600D7u
+-#define DDERR_NOTLOCKED         0x887602ACu
++#define DDERR_NOTLOCKED         0x88760248u
+ #define DDERR_GENERIC           0x80004005u
+ #define DDERR_SURFACEBUSY       0x887601B6u
+ 
