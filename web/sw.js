@@ -13,8 +13,8 @@
 'use strict';
 
 const CACHE_PREFIX = 'aoe2-';
-const PRECACHE = ['aoe2.js', 'aoe2.wasm'];
-const CACHE_FIRST = new Set(PRECACHE);
+const PRECACHE = ['aoe2.js'];
+const CACHE_FIRST = new Set(['aoe2.js', 'aoe2.wasm']);
 
 let cacheName = CACHE_PREFIX + 'v1';
 

@@ -538,7 +538,9 @@ async function measurePing() {
     if (!r.ok) return;
     await r.text();
     const ms = Math.round(performance.now() - t0);
-    $('ping').textContent = ms + ' ms';
+    const el = $('ping');
+    el.textContent = ms + ' ms';
+    el.style.color = ms < 100 ? 'rgba(100,255,100,0.5)' : ms < 250 ? 'rgba(255,200,80,0.5)' : 'rgba(255,80,80,0.6)';
   } catch { $('ping').textContent = ''; }
 }
 
@@ -551,6 +553,25 @@ function stopPingPolling() {
   if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
   $('ping').textContent = '';
 }
+
+// --- Toast notifications ---
+function toast(msg, duration) {
+  let el = $('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:35;background:rgba(0,0,0,0.85);color:#ddd;padding:8px 20px;border-radius:6px;font-size:14px;pointer-events:none;transition:opacity 0.3s;opacity:0';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.style.opacity = '0'; }, duration || 3000);
+}
+
+// --- Online/offline events during gameplay ---
+window.addEventListener('online', () => { if (gameRunning) toast('Connection restored'); });
+window.addEventListener('offline', () => { if (gameRunning) toast('Connection lost', 5000); });
 
 // --- Wake lock (keep screen on during gameplay) ---
 let wakeLock = null;
@@ -833,6 +854,22 @@ for (const evt of ['keydown', 'keyup', 'keypress']) {
   });
 }
 $('help-link').onclick = (e) => { e.preventDefault(); $('help-overlay').hidden = false; $('help-close').focus(); };
+$('clear-cache').onclick = async (e) => {
+  e.preventDefault();
+  if (!confirm('Delete all cached game files? The game will re-download on next visit.')) return;
+  try {
+    const r = await navigator.storage.getDirectory();
+    for await (const [name] of r.entries()) {
+      await r.removeEntry(name, { recursive: true });
+    }
+    if ('serviceWorker' in navigator) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+    log('Cache cleared. Reloading…');
+    setTimeout(() => location.reload(), 500);
+  } catch (err) { log('Failed to clear cache: ' + err.message); }
+};
 $('help-close').onclick = () => { $('help-overlay').hidden = true; $('help-link').focus(); };
 $('help-overlay').onclick = (e) => { if (e.target === $('help-overlay')) { $('help-overlay').hidden = true; $('help-link').focus(); } };
 document.addEventListener('keydown', (e) => {
