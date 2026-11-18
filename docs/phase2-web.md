@@ -1,0 +1,53 @@
+# Phase 2: the browser (WebAssembly)
+
+## How to run
+
+```bash
+source ~/emsdk/emsdk_env.sh        # emsdk 7.0.0 (git clone emscripten-core/emsdk; ./emsdk install latest)
+make web                           # build/web/aoe2.js + aoe2.wasm (43 MB)
+python3 tools/web/serve.py --install ~/aoe2-recomp-work/install    # http://localhost:8642/
+```
+
+On the page:
+1. tick the EULA box;
+2. "Copy from this server" (or "Choose your install folder…");
+3. Play.
+
+The copy goes into the browser's origin private file system once (ADR-0005).
+
+## Build
+
+`tools/web/web.mk` compiles the same lifted C, win32hle (with `patches/pcrecomp`) and
+host as the native build, with emcc:
+- **Flat memory** (`RECOMP_FLAT_MEMORY`): a guest VA is a wasm address. The PE image
+  (0x400000–0x7A4000) sits below 16 MB, which win32hle keeps for fixed reservations,
+  and the program's own data starts above (`-sGLOBAL_BASE=16MB`).
+- `-mtail-call`, for `RECOMP_ITAIL`'s `musttail`.
+- The game on a pthread (`-sPROXY_TO_PTHREAD`), so the page must be cross-origin
+  isolated.
+- WASMFS with its OPFS backend (`src/web/web_fs.c`).
+- Emscripten's SDL2, SDL2_ttf and zlib ports; Liberation fonts embedded at their Linux
+  path for win32hle's GDI text.
+- 1 GB initial memory, growable to 2 GB.
+
+The whole lift compiled and linked on the first try. A full build takes a few minutes
+on 24 cores.
+
+## Log
+
+### 2026-11-18: in game in the browser
+
+| Step | Result | Fix |
+|---|---|---|
+| First boot in Chromium | The exe maps at 0x400000, binds 255 imports with 0 unresolved, passes the EULA step and the disc check (D: = OPFS `cdrom/`, label AGE2_X1), sets 800×600×8, starts web audio. **Main menu.** History's text (GDI fonts) is right | – |
+| Input | Mouse and keyboard reach the game through SDL's canvas. A click from a test tool that sends no mouse move first lands where the pointer last was; real use moves the mouse first | – |
+| Frames lag a second or two | win32hle's browser path hands frames to the page only for 16 bpp games; an 8 bpp frame went through SDL's software renderer (scaled to 1280×960, proxied to the page's thread) | Patch 0005: 8 bpp frames take the same path, through a palette-to-RGB565 table, with `hle_screen_rgb_hook` content (the videos) composed first. `web/page.js` draws them on a canvas laid over SDL's (`Module.ra2Present`) |
+| A game | Standard Game starts, Town Center selected, its panel and buttons right. **66.7 frames a second presented in game** (Chromium, 24 cores) | – |
+
+## Open
+
+- The intro videos did not start in the browser (no 640×480×16 mode switch was logged); to check.
+- Sound: web audio starts; not yet listened to.
+- Save games and recordings in OPFS across reloads; the determinism check in the browser.
+- Firefox and Safari (no `showDirectoryPicker`; OPFS writes from the main thread).
+- Phase 3: DirectPlay over WebRTC.
