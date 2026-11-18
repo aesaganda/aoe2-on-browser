@@ -20,12 +20,38 @@ The relay's frame format is at the top of `relay.py`.
 
 ## Running it
 
+By hand:
+
 ```
 python3 tools/net/relay.py                                   # ws :8643/relay, tcp :8644
 python3 tools/web/serve.py --install <install-root>          # the page, :8642
-tailscale serve --bg --https=443 http://127.0.0.1:8642
-tailscale serve --bg --https=443 --set-path=/relay http://127.0.0.1:8643/relay
 ```
+
+As services that start with the machine (systemd), this is how the owner's PC runs:
+
+```
+sudo tools/deploy/install-services.sh <install-root>         # aoe2-relay, aoe2-web: enable + start
+sudo tools/deploy/install-services.sh --remove
+journalctl -u aoe2-relay -f                                  # who joins what
+```
+
+Under WSL, the distro has to be running for its services to run. Run
+`tools\deploy\wsl-keepalive.ps1` from Windows once. It puts a shortcut in the Startup
+folder that starts `wsl.exe -d Ubuntu-24.04 --exec sleep infinity` without a window
+at every sign-in; `-Remove` takes it out. `%USERPROFILE%\.wslconfig` has
+`vmIdleTimeout=-1`, so the VM is not shut down when idle.
+
+Tailscale runs on Windows. Its serve configuration persists, and it puts both
+services on the tailnet:
+
+```
+tailscale serve --bg --https=443 http://127.0.0.1:8642
+tailscale serve --bg --https=443 --set-path=/relay http://127.0.0.1:8643
+```
+
+After `make web`, the service serves the new build at once, since it reads
+`build/web/`. After a change to `relay.py` or `serve.py`, run
+`sudo systemctl restart aoe2-relay aoe2-web`.
 
 The page uses `//host:8643/relay` when it is served on port 8642 directly, and
 `//host/relay` behind a proxy. The native build takes `AOE2_RELAY=host:port`.

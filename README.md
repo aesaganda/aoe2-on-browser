@@ -83,7 +83,7 @@ The page then shows an Online section:
 - "Host a game" and each game's "Join" open the game straight at its Multiplayer Game setup screen.
 - The game's own Multiplayer → Online (aoe2-on-browser) screens work too.
 
-Native builds reach the relay with `AOE2_RELAY=host:8644`. For players on other machines, put the page and `/relay` behind a proxy, as described in `docs/phase3-multiplayer.md`; that file uses `tailscale serve`. Each player needs their own copy of the game.
+To keep the page and the relay running as services, run `sudo tools/deploy/install-services.sh ~/aoe2-install` (systemd). Native builds reach the relay with `AOE2_RELAY=host:8644`. For players on other machines, put the page and `/relay` behind a proxy, as described in `docs/phase3-multiplayer.md`; that file uses `tailscale serve`. Each player needs their own copy of the game.
 
 **Determinism check** (`docs/phase1-bringup.md`):
 
