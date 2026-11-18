@@ -22,9 +22,6 @@
   /* the game's frames (Module.ra2Present), over SDL's canvas; the mouse goes through to it */
   #screen { position: fixed; pointer-events: none; image-rendering: pixelated; }
   canvas[hidden] { display: none !important; }
-  #hint { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 8px 14px;
-          background: rgba(0,0,0,.8); color: var(--fg); border: 1px solid var(--accent); border-radius: 6px; pointer-events: none; }
-  #hint[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -51,7 +48,6 @@
 </div>
 <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()" hidden></canvas>
 <canvas id="screen" hidden></canvas>
-<div id="hint" hidden></div>
 <script src="page.js"></script>
 </body>
 </html>

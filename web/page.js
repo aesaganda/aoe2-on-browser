@@ -159,9 +159,7 @@ async function listRooms() {
     const b = document.createElement('button');
     b.textContent = 'Join';
     b.disabled = !r.open || r.players.length >= r.max || $('play').hidden;
-    // Joining by lobby launch does not get past the game's "Setting up" screen yet
-    // (docs/phase3-multiplayer.md), so Join starts the game and shows the way to the room.
-    b.onclick = () => play({ hint: `In the game: Multiplayer → Online (aoe2-on-browser) → Show Games → “${r.name}” → Join` });
+    b.onclick = () => play({ lobby: 'join:' + r.id, room: r.name });
     row.append(info, b);
     box.append(row);
   }
@@ -172,7 +170,6 @@ async function play(launch) {
   if (!crossOriginIsolated) { log('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
   if (!$('eula').checked) { log('The game runs only once its license agreement is accepted (the checkbox above).'); return; }
   $('setup').hidden = true;
-  if (launch && launch.hint) { $('hint').textContent = launch.hint; $('hint').hidden = false; setTimeout(() => { $('hint').hidden = true; }, 60000); }
   const canvas = $('canvas');
   canvas.hidden = false; canvas.focus();
   const s = document.createElement('script');
