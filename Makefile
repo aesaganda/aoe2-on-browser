@@ -13,7 +13,7 @@ GEN        := $(BUILD)/lift/gen
 GEN_STAMP  := $(GEN)/recomp_funcs.h
 PYTEST     := $(PY) -m pytest -q -p no:cacheprovider -n auto -rA
 
-.PHONY: help setup recon ghidra docs lift native native-trace test test-synthetic test-binary test-pcrecomp sweep clean
+.PHONY: help setup recon ghidra docs lift native native-trace web test test-synthetic test-binary test-pcrecomp sweep clean
 
 help:
 	@echo "make setup        one-time toolchain (venv, Ghidra) - see tools/setup-wsl.sh"
@@ -64,6 +64,11 @@ native: $(GEN_STAMP)
 # reset, again to dump /tmp/aoe2-funcs.txt). Slower; its own objects and binary.
 native-trace: $(GEN_STAMP)
 	$(MAKE) -f tools/native/native.mk -j$$(nproc) TRACE_DEFS=-DRECOMP_TRACE OBJ=build/native-trace/obj BIN=build/native-trace/aoe2
+
+# Phase 2: the browser build (emsdk's emcc on PATH) -> build/web/aoe2.js + aoe2.wasm;
+# serve with tools/web/serve.py (docs/phase2-web.md)
+web: $(GEN_STAMP)
+	$(MAKE) -f tools/web/web.mk -j$$(nproc)
 
 # Every leaf function (not just the 20 prototypes), 150 random states each: ~13 min on 20 cores.
 sweep: $(GEN_STAMP)

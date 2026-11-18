@@ -40,13 +40,21 @@ static void seed_registry(int disc) {
     hle_reg_set_string(HKLM, AOK_KEY, "CDPath", "C:\\");
 }
 
+#ifdef __EMSCRIPTEN__
+const char *web_game_root(void);   /* src/web/web_fs.c: the install tree, in the browser's OPFS */
+#endif
+
 int main(int argc, char **argv) {
-    if (argc < 2) {
+    const char *where = argc >= 2 ? argv[1] : NULL;
+#ifdef __EMSCRIPTEN__
+    if (!where) where = web_game_root();
+#endif
+    if (!where) {
         fprintf(stderr, "usage: %s <install-root>\n", argv[0]);
         return 64;
     }
     char root[PATH_MAX], exe[PATH_MAX + 32];
-    if (!realpath(argv[1], root)) { perror(argv[1]); return 66; }
+    if (!realpath(where, root)) { perror(where); return 66; }
     snprintf(exe, sizeof exe, "%s/age2_x1/age2_x1.exe", root);
     if (access(exe, R_OK) != 0) { perror(exe); return 66; }
 

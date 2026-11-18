@@ -26,3 +26,6 @@ __pycache__/
 .idea/
 Thumbs.db
 .DS_Store
+
+# local tooling (the desktop app's launch config: machine paths)
+/.claude/
