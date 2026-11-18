@@ -142,22 +142,23 @@ async function checkStorage(needed) {
 
 let installAbort = null;
 
-async function importFolder() {
-  if (!window.showDirectoryPicker) { log('This browser cannot open a folder here; use Chrome or Edge.'); return; }
-  const src = await window.showDirectoryPicker({ mode: 'read' });
-  const files = [];
-  for await (const [path, h] of walk(src)) if (!skip(path)) files.push([path, h]);
+async function importFromFiles(files) {
   const exe = files.find(([p]) => p.toLowerCase() === EXE_PATH);
   if (!exe) {
     log('That folder has no age2_x1\\age2_x1.exe: pick the folder the game is installed in.');
     return;
   }
-  const problem = await exeProblem(await exe[1].getFile());
+  const exeFile = exe[1] instanceof File ? exe[1] : await exe[1].getFile();
+  const problem = await exeProblem(exeFile);
   if (problem) { log(problem + ' Nothing was copied.'); return; }
   const base = await root();
   let total = 0;
   const sized = [];
-  for (const [p, h] of files) { const f = await h.getFile(); sized.push([p, f]); total += f.size; }
+  for (const [p, h] of files) {
+    const f = h instanceof File ? h : await h.getFile();
+    sized.push([p, f]);
+    total += f.size;
+  }
   await checkStorage(total);
   installAbort = new AbortController();
   $('bar').hidden = false;
@@ -177,6 +178,31 @@ async function importFolder() {
   }
   await finish(base);
   log(`Copied ${sized.length} files (${(total / 1e6).toFixed(0)} MB). Ready to play.`);
+}
+
+async function importFolder() {
+  if (window.showDirectoryPicker) {
+    const src = await window.showDirectoryPicker({ mode: 'read' });
+    const files = [];
+    for await (const [path, h] of walk(src)) if (!skip(path)) files.push([path, h]);
+    return importFromFiles(files);
+  }
+  return new Promise((resolve, reject) => {
+    const input = $('folder-input');
+    input.onchange = async () => {
+      try {
+        const files = [];
+        for (const f of input.files) {
+          const rel = f.webkitRelativePath.split('/').slice(1).join('/');
+          if (rel && !skip(rel)) files.push([rel, f]);
+        }
+        await importFromFiles(files);
+        resolve();
+      } catch (e) { reject(e); }
+      input.value = '';
+    };
+    input.click();
+  });
 }
 
 async function fetchRetry(url, opts, retries = 3) {
@@ -237,6 +263,15 @@ async function refresh() {
   if (ok) {
     $('eula').checked = true;
     $('server').hidden = true;
+    try {
+      let saves = 0;
+      const r = await root();
+      for await (const [n, h] of r.entries()) {
+        if (h.kind !== 'directory' || n.toLowerCase() !== 'savegame') continue;
+        for await (const [sn] of h.entries()) if (sn.toLowerCase().endsWith('.mgl') || sn.toLowerCase().endsWith('.mgx')) saves++;
+      }
+      $('save-count').textContent = saves ? `${saves} saved game${saves > 1 ? 's' : ''}` : '';
+    } catch { /* no SaveGame dir yet */ }
   } else {
     try { $('server').hidden = !(await fetch('install/manifest.json')).ok; } catch { $('server').hidden = true; }
   }
@@ -413,6 +448,7 @@ async function play(launch) {
     arguments: [],
     preRun: [(m) => {
       m.ENV.AOE2_ACCEPT_EULA = '1';
+      m.ENV.AOE2_TRACE_VIDEO = '1';
       if (launch && launch.lobby) {
         m.ENV.AOE2_ARGS = 'LOBBY';
         m.ENV.AOE2_LOBBY = launch.lobby;
