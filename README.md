@@ -13,6 +13,7 @@ The Definitive Edition is out of scope.
 - **Phase 1 is done**: a native Linux binary plays the game, with menus, single-player games, chat, minimap, sound, music and the intro videos (`docs/phase1-bringup.md`).
 - **Determinism:** the lifted build matches the original executable. A 403 s game the original recorded under Wine replays with 10 of 10 world checksums matching, and it holds the other way round too (`tools/oracle/`).
 - **Phase 2 is under way**: the game runs in Chromium as WebAssembly, menus and a game at about 66 fps (`docs/phase2-web.md`).
+- **Phase 3 is under way**: multiplayer runs through a relay server. The web page lists the open games and can host one in a single click. Browser and native games have played each other (`docs/phase3-multiplayer.md`, ADR-0006).
 
 The lifter is [pcrecomp](https://github.com/sp00nznet/pcrecomp) (MIT), pinned as a submodule (ADR-0001). Clone with `--recursive`, or run `git submodule update --init`.
 
@@ -21,7 +22,7 @@ The lifter is [pcrecomp](https://github.com/sp00nznet/pcrecomp) (MIT), pinned as
 | 0 | Recon, tool choice, lifter prototype + differential harness |
 | 1 | Full lift, Win32 shim, native Linux binary |
 | 2 | WASM: DirectDraw -> Canvas, DirectSound -> WebAudio, files -> OPFS |
-| 3 | DirectPlay -> WebRTC, lobby/relay server |
+| 3 | DirectPlay -> relay server (WebRTC later), game list on the page |
 
 ## You need your own copy of the game
 
@@ -69,6 +70,20 @@ python3 tools/web/serve.py --install ~/aoe2-install
 ```
 
 Open http://localhost:8642/, accept the EULA, copy your files into the browser once, and Play. The browser keeps its copy in this site's private storage (ADR-0005). Don't expose `serve.py --install` to a network.
+
+**Online:** run the relay next to the page:
+
+```bash
+pip install websockets
+python3 tools/net/relay.py
+```
+
+The page then shows an Online section:
+- "Host a game" opens the game straight at its Multiplayer Game setup screen.
+- The game list shows who is waiting.
+- To join, use Multiplayer → Online (aoe2-on-browser) → Show Games in the game.
+
+Native builds reach the relay with `AOE2_RELAY=host:8644`. For players on other machines, put the page and `/relay` behind a proxy, as described in `docs/phase3-multiplayer.md`; that file uses `tailscale serve`. Each player needs their own copy of the game.
 
 **Determinism check** (`docs/phase1-bringup.md`):
 
