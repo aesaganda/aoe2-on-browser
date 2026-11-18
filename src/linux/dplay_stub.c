@@ -6,7 +6,7 @@
  *   then the file version of dplayx.dll (>= 4.7.0.178, DX7; or 4.6.3.516, DX6.1a).
  * This file answers both. For multiplayer, DirectPlayEnumerateA lists one service
  * provider, "Online", and the IDirectPlay4A objects are src/net/dplay_net.c's: sessions
- * and messages over the relay (ADR-0006). The lobby object answers "not lobbied".
+ * and messages over the relay (ADR-0006). The lobby object serves lobby launch.
  *
  * Method arities come from mingw-w64's dplay.h / dplobby.h (tools/recon/dxheaders.py):
  * each stub pops exactly its stdcall arguments.
@@ -20,7 +20,7 @@
 
 #define DP_OK              0x00000000u
 #define DPERR_UNSUPPORTED  0x80004001u        /* E_NOTIMPL */
-#define DPERR_NOTLOBBIED   0x887703E8u        /* MAKE_DPHRESULT(1000) */
+#define DPERR_NOTLOBBIED   0x8877042Eu        /* MAKE_DPHRESULT(1070) */
 
 static int dp_trace = -1;
 #define TRACE(...) do { if (dp_trace < 0) dp_trace = getenv("AOE2_TRACE_DPLAY") != NULL; \
@@ -37,18 +37,39 @@ static const uint8_t SP_ONLINE[16] = { 0x61, 0x6F, 0x65, 0x32, 0x2D, 0x6F, 0x6E,
 /* IDirectPlay4A: src/net/dplay_net.c (sessions and messages over the relay). The
  * start-up check's IDirectPlay (v1) only QueryInterfaces and Releases, slots it shares. */
 
-static void lb_GetConnectionSettings(void) { RET(DPERR_NOTLOBBIED, 4); }   /* not launched from a lobby */
+/* Lobby launch (the game's LOBBY switch): the settings and the connection come from
+ * dplay_net.c, which reads the page's AOE2_LOBBY / AOE2_ROOM / AOE2_PLAYER. */
+uint32_t dplay_net_lobby_settings(uint32_t buf, uint32_t psize);
+uint32_t dplay_net_lobby_connect(uint32_t *out);
+static void lb_GetConnectionSettings(void) { RET(dplay_net_lobby_settings(A32(2), A32(3)), 4); }   /* (this, appid, data, &size) */
+static void lb_Connect(void) {                          /* (this, flags, &dp, outer) */
+    uint32_t dp = 0, hr = dplay_net_lobby_connect(&dp);
+    TRACE("lobby Connect -> %08X\n", hr);
+    if (A32(2)) MEM32(A32(2)) = hr == DP_OK ? dp : 0;
+    RET(hr, 4);
+}
+static void lb_ConnectEx(void) {                        /* (this, flags, iid, &dp, outer) */
+    uint32_t dp = 0, hr = dplay_net_lobby_connect(&dp);
+    TRACE("lobby ConnectEx -> %08X\n", hr);
+    if (A32(3)) MEM32(A32(3)) = hr == DP_OK ? dp : 0;
+    RET(hr, 5);
+}
+uint32_t dplay_net_lobby_set(uint32_t conn);
+static void lb_SetConnectionSettings(void) { RET(dplay_net_lobby_set(A32(3)), 4); }   /* (this, flags, appid, conn) */
+static void lb_ReceiveLobbyMessage(void) { RET(0x887700BEu /* DPERR_NOMESSAGES */, 6); }
+static void lb_SendLobbyMessage(void) { RET(DP_OK, 5); }     /* status for the lobby: nobody listens */
+static void lb_SetLobbyMessageEvent(void) { RET(DP_OK, 4); }
 static void lb_EnumLocalApplications(void) { RET(DP_OK, 4); }
 
 /* IDirectPlayLobby3(A); IDirectPlayLobby(A) and 2(A) share its first 14 slots. */
 static const win32hle_shim idirectplaylobby3[] = {
     { "dpl3!QueryInterface", hle_com_QueryInterface }, { "dpl3!AddRef", hle_com_AddRef },
     { "dpl3!Release", hle_com_Release },
-    { "dpl3!Connect", unsup4 }, { "dpl3!CreateAddress", unsup7 }, { "dpl3!EnumAddress", unsup5 },
+    { "dpl3!Connect", lb_Connect }, { "dpl3!CreateAddress", unsup7 }, { "dpl3!EnumAddress", unsup5 },
     { "dpl3!EnumAddressTypes", unsup5 }, { "dpl3!EnumLocalApplications", lb_EnumLocalApplications },
-    { "dpl3!GetConnectionSettings", lb_GetConnectionSettings }, { "dpl3!ReceiveLobbyMessage", unsup6 },
-    { "dpl3!RunApplication", unsup5 }, { "dpl3!SendLobbyMessage", unsup5 }, { "dpl3!SetConnectionSettings", unsup4 },
-    { "dpl3!SetLobbyMessageEvent", unsup4 }, { "dpl3!CreateCompoundAddress", unsup5 }, { "dpl3!ConnectEx", unsup5 },
+    { "dpl3!GetConnectionSettings", lb_GetConnectionSettings }, { "dpl3!ReceiveLobbyMessage", lb_ReceiveLobbyMessage },
+    { "dpl3!RunApplication", unsup5 }, { "dpl3!SendLobbyMessage", lb_SendLobbyMessage }, { "dpl3!SetConnectionSettings", lb_SetConnectionSettings },
+    { "dpl3!SetLobbyMessageEvent", lb_SetLobbyMessageEvent }, { "dpl3!CreateCompoundAddress", unsup5 }, { "dpl3!ConnectEx", lb_ConnectEx },
     { "dpl3!RegisterApplication", unsup3 }, { "dpl3!UnregisterApplication", unsup3 },
     { "dpl3!WaitForConnectionSettings", unsup2 },
     { NULL, NULL },

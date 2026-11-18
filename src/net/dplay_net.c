@@ -345,26 +345,33 @@ static uint32_t read_session(void) {                    /* a CREATE/JOIN reply: 
     return DP_OK;
 }
 
-static void dp_Open(void) {                             /* (this, DPSESSIONDESC2*, flags) */
-    uint32_t sd = A32(1), flags = A32(2);
-    if (!sd) RET(DPERR_INVALIDPARAMS, 3);
-    if (!connect_relay()) RET(DPERR_NOCONNECTION, 3);
+/* Create (DPOPEN_CREATE) or join a session: desc's pointers ignored, name and password apart */
+static uint32_t open_session(const uint8_t *desc, const char *name, const char *pw, uint32_t flags) {
+    if (!connect_relay()) return DPERR_NOCONNECTION;
     uint8_t d[80];
-    memcpy(d, hle_ptr(sd), 80);
-    char *name = hstr(MEM32(sd + 48)), *pw = hstr(MEM32(sd + 52));
+    memcpy(d, desc, 80);
     memset(d + 48, 0, 8);
     buf_t w = frame(flags & DPOPEN_CREATE ? CREATE : JOIN);
     if (flags & DPOPEN_CREATE) put(&w, d, 80), putstr(&w, name), putstr(&w, pw);
     else put(&w, d + 8, 16), putstr(&w, pw);
     TRACE("Open %s \"%s\"\n", flags & DPOPEN_CREATE ? "create" : "join", name);
-    free(name), free(pw);
     uint32_t hr = request(&w);
     if (hr == DP_OK) {
         read_session();
         S.host = (flags & DPOPEN_CREATE) != 0;
-        memcpy((uint8_t *)hle_ptr(sd) + 8, S.desc + 8, 16);   /* guidInstance, as DirectPlay fills it in */
     }
     TRACE("Open -> %08X\n", hr);
+    return hr;
+}
+
+static void dp_Open(void) {                             /* (this, DPSESSIONDESC2*, flags) */
+    uint32_t sd = A32(1), flags = A32(2);
+    if (!sd) RET(DPERR_INVALIDPARAMS, 3);
+    if (S.in_session) RET(DP_OK, 3);                    /* opened already by a lobby launch (Connect) */
+    char *name = hstr(MEM32(sd + 48)), *pw = hstr(MEM32(sd + 52));
+    uint32_t hr = open_session(hle_ptr(sd), name, pw, flags);
+    free(name), free(pw);
+    if (hr == DP_OK) memcpy((uint8_t *)hle_ptr(sd) + 8, S.desc + 8, 16);   /* guidInstance, as DirectPlay fills it in */
     RET(hr, 3);
 }
 
@@ -508,6 +515,8 @@ static void dp_SetSessionDesc(void) {                   /* (this, DPSESSIONDESC2
 /* (this, from, to, flags, data, size) */
 static uint32_t send_to(uint32_t from, uint32_t to, uint32_t flags, uint32_t data, uint32_t size) {
     if (!S.in_session) return DPERR_NOCONNECTION;
+    TRACE("send %08X -> %08X, %u bytes: %08X %08X\n", from, to, size,
+          data && size >= 4 ? MEM32(data) : 0, data && size >= 8 ? MEM32(data + 4) : 0);
     buf_t w = frame(SEND);
     put32(&w, from), put32(&w, to), put32(&w, flags), putblob(&w, data ? hle_ptr(data) : "", data ? size : 0);
     net_send(w.b, w.n);
@@ -622,6 +631,8 @@ static void dp_Receive(void) {
     if (pfrom) MEM32(pfrom) = m->from;
     if (pto) MEM32(pto) = m->to;
     if (m->sys) sys_write(m, buf); else memcpy(hle_ptr(buf), m->b, m->n);
+    if (!(flags & DPRECEIVE_PEEK))
+        TRACE("recv %08X -> %08X, %s %u bytes: %08X\n", m->from, m->to, m->sys ? "system" : "data", need, MEM32(buf));
     if (!(flags & DPRECEIVE_PEEK)) {
         *mm = m->next;
         if (S.tail == m) S.tail = prev;
@@ -724,6 +735,85 @@ const win32hle_shim dplay_net_vtable[] = {
     { "dpn!GetMessageQueue", dp_GetMessageQueue }, { "dpn!CancelMessage", cancel3 }, { "dpn!CancelPriority", cancel4 },
     { NULL, NULL },
 };
+
+/* ---------------------------------------------------------------- lobby launch
+ *
+ * Started with LOBBY on its command line, the game asks DirectPlayLobby for its
+ * connection settings and connects through it, straight into the game's setup
+ * screen (as MSN Zone launched it). The web page (or a shell) says what to do:
+ *   AOE2_LOBBY=host            create a room, named AOE2_ROOM
+ *   AOE2_LOBBY=join:<32 hex>   join the room with that guidInstance (relay /rooms)
+ *   AOE2_PLAYER=<name>         the player's name
+ */
+static const uint8_t SP_ONLINE_GUID[16] = { 0x61, 0x6F, 0x65, 0x32, 0x2D, 0x6F, 0x6E, 0x2D, 0x62, 0x72, 0x6F, 0x77, 0x73, 0x65, 0x72, 0x21 };
+static const uint8_t AOC_APP_GUID[16] = { 0x3f, 0x3f, 0xe9, 0x5d, 0x90, 0xfc, 0xe1, 0x4e, 0xae, 0x5a, 0x63, 0xda, 0xfa, 0x05, 0x59, 0x50 };
+
+static int lobby_mode(uint8_t inst[16]) {               /* 2 host, 1 join, 0 not lobbied */
+    const char *l = getenv("AOE2_LOBBY");
+    if (!l || !*l) return 0;
+    if (!strcmp(l, "host")) return 2;
+    if (strncmp(l, "join:", 5) || strlen(l + 5) != 32) return 0;
+    for (int i = 0; i < 16; i++) { unsigned v; if (sscanf(l + 5 + 2 * i, "%2x", &v) != 1) return 0; inst[i] = (uint8_t)v; }
+    return 1;
+}
+static const char *lobby_player(void) { const char *p = getenv("AOE2_PLAYER"); return p && *p ? p : "Player"; }
+static const char *lobby_room(void) { const char *r = getenv("AOE2_ROOM"); return r && *r ? r : "Online game"; }
+static uint8_t g_lobby_set[80];                         /* the game's SetConnectionSettings desc */
+static int g_lobby_set_valid;
+static void lobby_desc(uint8_t d[80], const uint8_t inst[16]) {
+    memset(d, 0, 80);
+    if (g_lobby_set_valid) memcpy(d, g_lobby_set, 80), memset(d + 48, 0, 8);   /* its flags, limits, user data */
+    else d[4] = 0x40, d[40] = 8;                        /* DPSESSION_KEEPALIVE, 8 players */
+    d[0] = 80, d[1] = d[2] = d[3] = 0;
+    memset(d + 8, 0, 16);
+    if (inst) memcpy(d + 8, inst, 16);
+    memcpy(d + 24, AOC_APP_GUID, 16);
+}
+
+/* IDirectPlayLobby::SetConnectionSettings(this, flags, appid, DPLCONNECTION*): the game
+ * adjusts the session it will connect with (its flags, its player limit) */
+uint32_t dplay_net_lobby_set(uint32_t conn) {
+    if (!conn || !MEM32(conn + 8)) return DPERR_INVALIDPARAMS;
+    memcpy(g_lobby_set, hle_ptr(MEM32(conn + 8)), 80);
+    g_lobby_set_valid = 1;
+    TRACE("lobby: settings from the game: flags %X, max %u\n", MEM32(MEM32(conn + 8) + 4), MEM32(MEM32(conn + 8) + 40));
+    return DP_OK;
+}
+
+/* IDirectPlayLobby::GetConnectionSettings(this, appid, data, &size) */
+uint32_t dplay_net_lobby_settings(uint32_t buf, uint32_t psize) {
+    uint8_t inst[16];
+    int mode = lobby_mode(inst);
+    if (!mode) return 0x8877042Eu;                      /* DPERR_NOTLOBBIED */
+    const char *room = lobby_room(), *player = lobby_player();
+    uint32_t rl = (uint32_t)strlen(room) + 1, pl = (uint32_t)strlen(player) + 1, need = 40 + 80 + 16 + rl + pl;
+    uint32_t have = psize ? MEM32(psize) : 0;
+    if (psize) MEM32(psize) = need;
+    if (!buf || have < need) return DPERR_BUFFERTOOSMALL;
+    uint32_t sd = buf + 40, nm = sd + 80, rs = nm + 16, ps = rs + rl;
+    uint8_t d[80];
+    lobby_desc(d, mode == 1 ? inst : NULL);
+    memcpy(hle_ptr(sd), d, 80);
+    MEM32(sd + 48) = rs;
+    MEM32(buf) = 40, MEM32(buf + 4) = mode == 2 ? DPOPEN_CREATE : DPOPEN_JOIN, MEM32(buf + 8) = sd, MEM32(buf + 12) = nm;
+    memcpy(hle_ptr(buf + 16), SP_ONLINE_GUID, 16);
+    MEM32(buf + 32) = 0, MEM32(buf + 36) = 0;
+    MEM32(nm) = 16, MEM32(nm + 4) = 0, MEM32(nm + 8) = ps, MEM32(nm + 12) = ps;
+    memcpy(hle_ptr(rs), room, rl), memcpy(hle_ptr(ps), player, pl);
+    TRACE("lobby: %s \"%s\" as \"%s\"\n", mode == 2 ? "host" : "join", room, player);
+    return DP_OK;
+}
+
+/* IDirectPlayLobby::Connect / ConnectEx: the session, opened, as a DirectPlay object */
+uint32_t dplay_net_lobby_connect(uint32_t *out) {
+    uint8_t inst[16], d[80];
+    int mode = lobby_mode(inst);
+    if (!mode) return 0x8877042Eu;
+    lobby_desc(d, mode == 1 ? inst : NULL);
+    uint32_t hr = open_session(d, lobby_room(), "", mode == 2 ? DPOPEN_CREATE : DPOPEN_JOIN);
+    if (hr == DP_OK) *out = new_pair();
+    return hr;
+}
 
 /* After hle_screen_open (it sets the poll hook this one chains) */
 void dplay_net_install(void) {
