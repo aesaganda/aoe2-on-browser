@@ -1,4 +1,4 @@
-# aoe2-recomp
+# aoe2-on-browser
 
 Static recompilation of the original *Age of Empires II: The Conquerors* (2000,
 Genie engine, MSVC 6, 32-bit Windows PE) to C, with WebAssembly in the browser as
@@ -9,7 +9,10 @@ The Definitive Edition is out of scope.
 
 ## Status
 
-**Phase 0 is done.** The verdict is GO for Phase 1; see `docs/phase0-report.md`.
+- **Phase 0 is done**: the verdict was GO (`docs/phase0-report.md`).
+- **Phase 1 is done**: a native Linux binary plays the game, with menus, single-player games, chat, minimap, sound, music and the intro videos (`docs/phase1-bringup.md`).
+- **Determinism:** the lifted build matches the original executable. A 403 s game the original recorded under Wine replays with 10 of 10 world checksums matching, and it holds the other way round too (`tools/oracle/`).
+- **Phase 2 is under way**: the game runs in Chromium as WebAssembly, menus and a game at about 66 fps (`docs/phase2-web.md`).
 
 The lifter is [pcrecomp](https://github.com/sp00nznet/pcrecomp) (MIT), pinned as a submodule (ADR-0001). Clone with `--recursive`, or run `git submodule update --init`.
 
@@ -38,6 +41,42 @@ make sweep      # differential test over every leaf function (~13 min)
 ```
 
 From Windows: `wsl -d Ubuntu-24.04 make docs`.
+
+### Play it
+
+Lay out an install tree from your own two disc images; it is about 0.9 GB and stays outside the repo:
+
+```bash
+sudo apt install p7zip-full cabextract ffmpeg libsdl2-dev libsdl2-ttf-dev zlib1g-dev gdb
+tools/install_from_iso.sh <AoE2.iso> <AoE2_Conquerors.iso> orig/age2_x1.exe ~/aoe2-install
+```
+
+**Native (Linux):**
+
+```bash
+make native
+AOE2_ACCEPT_EULA=1 build/native/aoe2 ~/aoe2-install
+```
+
+`AOE2_ACCEPT_EULA=1` is your answer to the game's license step.
+
+**Browser:**
+
+```bash
+source ~/emsdk/emsdk_env.sh
+make web
+python3 tools/web/serve.py --install ~/aoe2-install
+```
+
+Open http://localhost:8642/, accept the EULA, copy your files into the browser once, and Play. The browser keeps its copy in this site's private storage (ADR-0005). Don't expose `serve.py --install` to a network.
+
+**Determinism check** (`docs/phase1-bringup.md`):
+
+```bash
+tools/oracle/replay_check.sh ~/aoe2-install <recording.mgx>
+```
+
+This replays a recorded game with the game's own sync checking. `tools/oracle/wine_*.sh` do the same with the original executable under Wine.
 
 ## Layout
 
