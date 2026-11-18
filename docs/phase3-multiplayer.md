@@ -45,10 +45,35 @@ AOE2_ARGS=LOBBY AOE2_LOBBY=host AOE2_ROOM="My game" AOE2_PLAYER=Alice build/nati
 | browser, "Host a game" on the page | native | guest in-game | setup screen in ~30 s, guest joined, game started on both |
 | native, lobby launch | native, lobby launch | `AOE2_LOBBY=host` / `join:<id>` | guest at the setup screen 5–10 s after starting |
 | native, lobby launch | browser, "Join" on the page | one click | guest at the setup screen within 20 s; game started on both |
+| native, lobby launch | native, lobby launch | both ready, host starts | game runs: turn counter rising, pictures changing on both |
+| browser, "Host a game" | native, lobby launch | both ready, host starts | game runs: the native guest's turn went 0x58 → 0x80 in 10 s; a villager queued in the browser was trained |
+| browser (localhost origin) | browser (127.0.0.1 origin) | one click each | both reach the game, then stall: see below |
 
-Not checked yet: two browsers. Two tabs of one browser share one OPFS copy, and
-WASMFS takes exclusive access handles to its files, so that needs two browsers or two
-browser profiles. Also not checked: players on other machines across the tailnet.
+**Two browsers.** Two origins in one browser have separate OPFS copies, so they
+stand in for two players. Both joined in one click and the game started on both,
+but then neither advanced. The in-app browser used for testing runs only the tab
+in front, so the hidden tab's game stops. Lockstep then waits for it, on both sides.
+The same build kept turning against a native peer with its tab in front. Two
+browsers on two machines, each in front, have not been tried.
+
+Expect the same in a real browser. If a player hides the game's tab, the browser may
+throttle it, and everyone's game waits for that player. Keep the game visible while
+playing.
+
+Not checked yet: players on other machines across the tailnet.
+
+## The page server and the tailnet
+
+`tools/web/serve.py --install` serves the owner's install tree to the page's "Copy
+from this server". `tailscale serve` forwards to it from 127.0.0.1, so until
+2026-11-18 that tree was reachable by anyone on the tailnet. It is now served only
+to requests that come straight from loopback: a loopback Host, and no
+`X-Forwarded-*`, `Forwarded`, `Via` or `Tailscale-*` headers.
+
+Paths are now normalised and confined to their root. Before, a raw `../` in a
+request could read any file the server could. Over the tailnet, `/install/…` now
+answers 404. The page, `aoe2.js`, `aoe2.wasm` and `/relay` still work. Other players
+copy their own installs with "Choose your install folder…".
 
 ## Bugs found on the way
 
