@@ -29,10 +29,16 @@ pointers are ignored) followed by str name, str password.
 
 REPLY bodies: LIST -> u32 n, n x desc. CREATE/JOIN -> desc, u32 n, n x player.
 NEWPLAYER -> u32 id. Every other request -> empty.
+
+HTTP GET .../rooms on the WebSocket port answers the rooms as JSON (id = the
+guidInstance in hex, name, players, max, open, password), for the web page's game
+list.
 """
 import argparse
 import asyncio
+import http
 import itertools
+import json
 import logging
 import os
 import struct
@@ -154,7 +160,7 @@ class Relay:
             room = Room(desc, name, password, c)
             self.rooms[room.instance] = room
             c.room = room
-            log.info("#%d created room %r (max %d)", c.n, name, room.max_players())
+            log.info("#%d created room %r (max %d, application %s)", c.n, name, room.max_players(), bytes(desc[24:40]).hex())
             return await self.reply(c, req, DP_OK, room.pack() + struct.pack("<I", 0))
         if t == JOIN:
             inst, password = r.raw(16), r.str()
@@ -264,6 +270,7 @@ async def main():
     ap.add_argument("--tcp-port", type=int, default=8644)
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    logging.getLogger("websockets").setLevel(logging.WARNING)     # not every /rooms poll
     relay = Relay()
 
     async def ws_handler(ws, path=None):
@@ -285,7 +292,24 @@ async def main():
         await relay.serve(Conn(send, writer.get_extra_info("peername")), frames())
         writer.close()
 
-    async with websockets.serve(ws_handler, a.host, a.ws_port, max_size=1 << 20):
+    # GET .../rooms (not a WebSocket): the rooms, for the web page's game list
+    async def process_request(path, headers):
+        if not path.split("?")[0].endswith("/rooms"):
+            return None
+        rooms = []
+        for r in relay.rooms.values():
+            flags = struct.unpack_from("<I", r.desc, 4)[0]
+            rooms.append({
+                "id": r.instance.hex(), "name": r.name.decode("cp1252", "replace"),
+                "players": [p.short.decode("cp1252", "replace") for p in r.players.values()],
+                "max": r.max_players(), "open": not flags & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED),
+                "password": bool(r.password),
+            })
+        body = json.dumps({"rooms": rooms}).encode()
+        return (http.HTTPStatus.OK, [("Content-Type", "application/json"), ("Cache-Control", "no-store"),
+                      ("Access-Control-Allow-Origin", "*"), ("Cross-Origin-Resource-Policy", "cross-origin")], body)
+
+    async with websockets.serve(ws_handler, a.host, a.ws_port, max_size=1 << 20, process_request=process_request):
         tcp = await asyncio.start_server(tcp_handler, a.host, a.tcp_port)
         log.info("relay: ws://%s:%d/relay (browser), tcp %s:%d (native)", a.host, a.ws_port, a.host, a.tcp_port)
         async with tcp:
