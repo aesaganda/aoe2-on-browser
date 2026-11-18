@@ -37,6 +37,7 @@
   #status { font-size: 12px; padding: 2px 8px; border-radius: 3px; display: inline-block; }
   #status.ok { color: var(--ok); }
   #status.err { color: var(--err); }
+  .dimmed { opacity: 0.5; pointer-events: none; }
   #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg); color: var(--dim); font: 16px system-ui, sans-serif; z-index: 10; }
   #loading progress { width: 200px; }
   .warn { background: #332200; border: 1px solid #664400; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #ffcc66; font-size: 13px; }
@@ -83,6 +84,7 @@
     <div id="rooms" role="list">…</div>
   </section>
   <progress id="bar" max="1" value="0" hidden></progress>
+  <span id="bar-text" style="font-size:12px;color:var(--dim)"></span>
   <div id="log" role="log" aria-live="polite"></div>
   <footer>
     <span id="version"></span>

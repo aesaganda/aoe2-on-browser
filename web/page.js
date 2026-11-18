@@ -16,6 +16,9 @@ const log = (s) => { const el = $('log'); el.textContent += s + '\n'; el.scrollT
 const DISC_LABEL = 'AGE2_X1';
 const MARK = '.complete';
 
+window.onerror = (msg) => { log('Error: ' + msg); };
+window.onunhandledrejection = (e) => { log('Error: ' + (e.reason?.message || e.reason || 'unknown')); };
+
 // --- Compatibility checks ---
 function checkCompat() {
   const issues = [];
@@ -105,6 +108,26 @@ async function copiedExe() {
   return null;
 }
 
+function progressTracker(total) {
+  const start = performance.now();
+  let done = 0;
+  return {
+    add(bytes) {
+      done += bytes;
+      $('bar').value = done / total;
+      const elapsed = (performance.now() - start) / 1000;
+      if (elapsed > 1) {
+        const speed = done / elapsed;
+        const left = (total - done) / speed;
+        const mb = (speed / 1e6).toFixed(1);
+        const eta = left < 60 ? `${Math.ceil(left)}s` : `${Math.floor(left / 60)}m ${Math.ceil(left % 60)}s`;
+        $('bar-text').textContent = `${mb} MB/s — ${eta} left`;
+      }
+    },
+    clear() { $('bar-text').textContent = ''; },
+  };
+}
+
 async function importFolder() {
   if (!window.showDirectoryPicker) { log('This browser cannot open a folder here; use Chrome or Edge.'); return; }
   const src = await window.showDirectoryPicker({ mode: 'read' });
@@ -118,14 +141,16 @@ async function importFolder() {
   const problem = await exeProblem(await exe[1].getFile());
   if (problem) { log(problem + ' Nothing was copied.'); return; }
   const base = await root();
-  let total = 0, done = 0;
+  let total = 0;
   const sized = [];
   for (const [p, h] of files) { const f = await h.getFile(); sized.push([p, f]); total += f.size; }
   $('bar').hidden = false;
+  const prog = progressTracker(total);
   for (const [p, f] of sized) {
     await writeFile(base, p, f);
-    done += f.size; $('bar').value = done / total;
+    prog.add(f.size);
   }
+  prog.clear();
   $('bar').hidden = true;
   await finish(base);
   log(`Copied ${sized.length} files (${(total / 1e6).toFixed(0)} MB). Ready to play.`);
@@ -136,14 +161,15 @@ async function importServer() {
   const base = await root();
   const files = list.files.filter(([p]) => !skip(p));
   const total = files.reduce((s, [, n]) => s + n, 0);
-  let done = 0;
   $('bar').hidden = false;
+  const prog = progressTracker(total);
   for (const [p, n] of files) {
     const r = await fetch('install/' + p.split('/').map(encodeURIComponent).join('/'));
     if (!r.ok) throw new Error(`${p}: ${r.status}`);
     await writeFile(base, p, r.body);
-    done += n; $('bar').value = done / total;
+    prog.add(n);
   }
+  prog.clear();
   $('bar').hidden = true;
   await finish(base);
   log(`Copied ${files.length} files (${(total / 1e6).toFixed(0)} MB) from the server. Ready to play.`);
@@ -214,6 +240,7 @@ function setStatus(ok, text) {
   el.textContent = text;
   el.className = ok ? 'ok' : 'err';
   relayOk = ok;
+  $('rooms').classList.toggle('dimmed', !ok);
 }
 
 const playerName = () => ($('player').value.trim() || 'Player').slice(0, 15);
@@ -278,6 +305,11 @@ function startRoomPolling() {
 function stopRoomPolling() {
   if (roomInterval) { clearInterval(roomInterval); roomInterval = null; }
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { stopRoomPolling(); }
+  else if (!$('setup').hidden) { startRoomPolling(); }
+});
 
 function returnToLobby(msg) {
   $('loading').hidden = true;
