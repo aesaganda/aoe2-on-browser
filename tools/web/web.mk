@@ -26,7 +26,8 @@ HLE_SRC := $(addprefix $(PC)/win32hle/,$(notdir $(filter-out %_selftest.c,$(wild
 $(PC)/win32hle/%.c: $(PC_COPY)/.patched ;
 .SECONDARY:
 APP_SRC := src/linux/main.c src/linux/runtime_glue.c src/linux/aoc_shims.c src/linux/win32_gaps.c src/linux/dplay_stub.c src/linux/cdrom.c \
-           src/linux/aoc_inflate.c src/linux/ddraw_debug.c src/linux/edit_overlay.c src/linux/mciwnd.c src/web/web_fs.c
+           src/linux/aoc_inflate.c src/linux/ddraw_debug.c src/linux/edit_overlay.c src/linux/mciwnd.c src/web/web_fs.c \
+           src/net/dplay_net.c src/net/net_queue.c src/web/net_web.c
 
 PORTS   := -sUSE_SDL=2 -sUSE_SDL_TTF=2 -sUSE_ZLIB=1
 COMMON  := -g0 -fno-strict-aliasing -mtail-call -pthread -DRECOMP_FLAT_MEMORY $(PORTS) \
@@ -42,6 +43,7 @@ LDFLAGS := -O2 -mtail-call -pthread -sPROXY_TO_PTHREAD -sWASMFS $(PORTS) \
            -sSTACK_SIZE=16MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB -sPTHREAD_POOL_SIZE=8 \
            -sEXIT_RUNTIME -sMODULARIZE -sEXPORT_NAME=AoE2 -sENVIRONMENT=web,worker \
            -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU16,HEAP32,HEAPU32,UTF8ToString,ENV \
+           -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
            --embed-file $(FONTS)@$(FONTS)
 
 GEN_OBJ := $(patsubst $(GEN)/%.c,$(OBJ)/gen/%.o,$(GEN_SRC))

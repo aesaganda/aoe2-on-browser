@@ -25,6 +25,7 @@ void dplay_stub_register_com(void);
 void cdrom_mount(char letter, const char *dir, const char *label);   /* cdrom.c */
 void edit_overlay_install(void);   /* edit_overlay.c */
 void mciwnd_register(void);        /* mciwnd.c: the AVI cinematics */
+void dplay_net_install(void);      /* src/net/dplay_net.c: multiplayer over the relay */
 void ddraw_debug_register(void);   /* ddraw_debug.c: AOE2_TRACE_BLT / AOE2_DUMP_SURFACES */
 
 #define HKLM 0x80000002u
@@ -91,6 +92,7 @@ int main(int argc, char **argv) {
     if (hle_screen_open("Age of Empires II: The Conquerors", 0, hl && !strcmp(hl, "1")) != 0)
         fprintf(stderr, "[aoe2] no window; continuing headless\n");
     edit_overlay_install();         /* EDIT controls over the picture (chains screen.c's hook) */
+    dplay_net_install();            /* DirectPlay's messages, taken at each pump (chains the poll hook) */
     /* The game's own command-line switches (NOSTARTUP, DONTIGNORESYNC, ...): AOE2_ARGS.
      * GetCommandLineA answers the exe's Windows path with them, as the shortcut would. */
     static char cmdline[1024];

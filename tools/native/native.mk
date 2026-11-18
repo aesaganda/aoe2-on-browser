@@ -31,7 +31,8 @@ $(PC)/win32hle/%.c $(PC)/win32hle/%.h $(PC)/recomp32/%.h: $(PC_STAMP) ;
 # few symbols the lifted code expects from them come from src/linux/runtime_glue.c.
 RT_SRC  :=
 APP_SRC := src/linux/main.c src/linux/runtime_glue.c src/linux/aoc_shims.c src/linux/win32_gaps.c src/linux/dplay_stub.c src/linux/cdrom.c \
-           src/linux/aoc_inflate.c src/linux/ddraw_debug.c src/linux/edit_overlay.c src/linux/mciwnd.c
+           src/linux/aoc_inflate.c src/linux/ddraw_debug.c src/linux/edit_overlay.c src/linux/mciwnd.c \
+           src/net/dplay_net.c src/net/net_queue.c src/net/net_native.c
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 SDL2_ttf)
 SDL_LIBS   := $(shell pkg-config --libs sdl2 SDL2_ttf)
@@ -45,7 +46,7 @@ CFLAGS_RT  := -O1 -w $(CFLAGS_COMMON) $(SDL_CFLAGS)
 GEN_OBJ := $(patsubst $(GEN)/%.c,$(OBJ)/gen/%.o,$(GEN_SRC))
 HLE_OBJ := $(patsubst $(PC)/win32hle/%.c,$(OBJ)/hle/%.o,$(HLE_SRC))
 RT_OBJ  := $(patsubst $(PC)/recomp32/%.c,$(OBJ)/rt/%.o,$(RT_SRC))
-APP_OBJ := $(patsubst src/linux/%.c,$(OBJ)/app/%.o,$(APP_SRC))
+APP_OBJ := $(patsubst src/%.c,$(OBJ)/app/%.o,$(APP_SRC))
 
 $(BIN): $(GEN_OBJ) $(HLE_OBJ) $(RT_OBJ) $(APP_OBJ)
 	$(CC) -o $@ $^ $(SDL_LIBS) -lz -lpthread -lm
@@ -62,6 +63,6 @@ $(OBJ)/rt/%.o: $(PC)/recomp32/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_RT) -c $< -o $@
 
-$(OBJ)/app/%.o: src/linux/%.c $(PC_STAMP)
+$(OBJ)/app/%.o: src/%.c $(PC_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_RT) -Wall -c $< -o $@

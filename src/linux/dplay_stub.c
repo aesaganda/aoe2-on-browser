@@ -1,12 +1,12 @@
 /*
- * dplay_stub.c - a DirectPlay that is present but has no service providers.
+ * dplay_stub.c - DirectPlay's entry points, its lobby object and dplayx.dll's version.
  *
  * Even for single player, AoC's start-up checks for DirectX 6.1a+ like this:
  *   DirectPlayCreate -> QueryInterface(IID_IDirectPlay4) -> Release,
  *   then the file version of dplayx.dll (>= 4.7.0.178, DX7; or 4.6.3.516, DX6.1a).
- * This file answers both. The objects enumerate no connections and no sessions,
- * so the multiplayer screens are empty; every other method is unsupported.
- * The real transport (WebRTC/WebSocket) is Phase 3.
+ * This file answers both. For multiplayer, DirectPlayEnumerateA lists one service
+ * provider, "Online", and the IDirectPlay4A objects are src/net/dplay_net.c's: sessions
+ * and messages over the relay (ADR-0006). The lobby object answers "not lobbied".
  *
  * Method arities come from mingw-w64's dplay.h / dplobby.h (tools/recon/dxheaders.py):
  * each stub pops exactly its stdcall arguments.
@@ -28,37 +28,14 @@ static int dp_trace = -1;
 
 /* One unsupported stub per arity (argument count including `this`). */
 #define UNSUP(n) static void unsup##n(void) { TRACE("unsupported method (%d args)\n", n); RET(DPERR_UNSUPPORTED, n); }
-UNSUP(1) UNSUP(2) UNSUP(3) UNSUP(4) UNSUP(5) UNSUP(6) UNSUP(7) UNSUP(10)
+UNSUP(2) UNSUP(3) UNSUP(4) UNSUP(5) UNSUP(6) UNSUP(7)
 
-static void dp_Close(void)            { RET(DP_OK, 1); }
-static void dp_EnumSessions(void)     { RET(DP_OK, 6); }    /* (this, desc, timeout, cb, ctx, flags): none */
-static void dp_EnumConnections(void)  { RET(DP_OK, 5); }    /* (this, app guid, cb, ctx, flags): none */
-static void dp_GetMessageCount(void)  { if (A32(2)) MEM32(A32(2)) = 0; RET(DP_OK, 3); }
+/* The service provider the game lists (DirectPlayEnumerateA): ours, "Online". */
+static const uint8_t SP_ONLINE[16] = { 0x61, 0x6F, 0x65, 0x32, 0x2D, 0x6F, 0x6E, 0x2D,      /* "aoe2-on-browser!" */
+                                       0x62, 0x72, 0x6F, 0x77, 0x73, 0x65, 0x72, 0x21 };
 
-/* IDirectPlay4(A) layout; IDirectPlay (v1), which DirectPlayCreate hands out, shares
- * slots 0-2, and the game only QueryInterfaces and Releases it. */
-static const win32hle_shim idirectplay4[] = {
-    { "dp4!QueryInterface", hle_com_QueryInterface }, { "dp4!AddRef", hle_com_AddRef },
-    { "dp4!Release", hle_com_Release },
-    { "dp4!AddPlayerToGroup", unsup3 }, { "dp4!Close", dp_Close }, { "dp4!CreateGroup", unsup6 },
-    { "dp4!CreatePlayer", unsup7 }, { "dp4!DeletePlayerFromGroup", unsup3 }, { "dp4!DestroyGroup", unsup2 },
-    { "dp4!DestroyPlayer", unsup2 }, { "dp4!EnumGroupPlayers", unsup6 }, { "dp4!EnumGroups", unsup5 },
-    { "dp4!EnumPlayers", unsup5 }, { "dp4!EnumSessions", dp_EnumSessions }, { "dp4!GetCaps", unsup3 },
-    { "dp4!GetGroupData", unsup5 }, { "dp4!GetGroupName", unsup4 }, { "dp4!GetMessageCount", dp_GetMessageCount },
-    { "dp4!GetPlayerAddress", unsup4 }, { "dp4!GetPlayerCaps", unsup4 }, { "dp4!GetPlayerData", unsup5 },
-    { "dp4!GetPlayerName", unsup4 }, { "dp4!GetSessionDesc", unsup3 }, { "dp4!Initialize", unsup2 },
-    { "dp4!Open", unsup3 }, { "dp4!Receive", unsup6 }, { "dp4!Send", unsup6 }, { "dp4!SetGroupData", unsup5 },
-    { "dp4!SetGroupName", unsup4 }, { "dp4!SetPlayerData", unsup5 }, { "dp4!SetPlayerName", unsup4 },
-    { "dp4!SetSessionDesc", unsup3 }, { "dp4!AddGroupToGroup", unsup3 }, { "dp4!CreateGroupInGroup", unsup7 },
-    { "dp4!DeleteGroupFromGroup", unsup3 }, { "dp4!EnumConnections", dp_EnumConnections },
-    { "dp4!EnumGroupsInGroup", unsup6 }, { "dp4!GetGroupConnectionSettings", unsup5 },
-    { "dp4!InitializeConnection", unsup3 }, { "dp4!SecureOpen", unsup5 }, { "dp4!SendChatMessage", unsup5 },
-    { "dp4!SetGroupConnectionSettings", unsup4 }, { "dp4!StartSession", unsup3 }, { "dp4!GetGroupFlags", unsup3 },
-    { "dp4!GetGroupParent", unsup3 }, { "dp4!GetPlayerAccount", unsup5 }, { "dp4!GetPlayerFlags", unsup3 },
-    { "dp4!GetGroupOwner", unsup3 }, { "dp4!SetGroupOwner", unsup3 }, { "dp4!SendEx", unsup10 },
-    { "dp4!GetMessageQueue", unsup6 }, { "dp4!CancelMessage", unsup3 }, { "dp4!CancelPriority", unsup4 },
-    { NULL, NULL },
-};
+/* IDirectPlay4A: src/net/dplay_net.c (sessions and messages over the relay). The
+ * start-up check's IDirectPlay (v1) only QueryInterfaces and Releases, slots it shares. */
 
 static void lb_GetConnectionSettings(void) { RET(DPERR_NOTLOBBIED, 4); }   /* not launched from a lobby */
 static void lb_EnumLocalApplications(void) { RET(DP_OK, 4); }
@@ -77,9 +54,10 @@ static const win32hle_shim idirectplaylobby3[] = {
     { NULL, NULL },
 };
 
-static uint32_t g_vt_dp, g_vt_lobby;
+static uint32_t g_vt_lobby;
 
-static uint32_t new_dp(void)    { if (!g_vt_dp) g_vt_dp = hle_com_vtable(idirectplay4); return hle_com_new(g_vt_dp, 8); }
+uint32_t dplay_net_new(void);       /* dplay_net.c: an IDirectPlay4A (and its v1 partner) */
+static uint32_t new_dp(void)    { return dplay_net_new(); }
 static uint32_t new_lobby(void) { if (!g_vt_lobby) g_vt_lobby = hle_com_vtable(idirectplaylobby3); return hle_com_new(g_vt_lobby, 8); }
 
 static void s_DirectPlayCreate(void) {                  /* (guid sp, &out, outer) */
@@ -87,7 +65,17 @@ static void s_DirectPlayCreate(void) {                  /* (guid sp, &out, outer
     if (A32(1)) MEM32(A32(1)) = new_dp();
     RET(DP_OK, 3);
 }
-static void s_DirectPlayEnumerateA(void) { RET(DP_OK, 2); }   /* (cb, ctx): no service providers */
+static void s_DirectPlayEnumerateA(void) {              /* (cb, ctx): cb(&guid sp, name, major, minor, ctx) */
+    uint32_t cb = A32(0), ctx = A32(1);
+    TRACE("DirectPlayEnumerateA cb %08X\n", cb);
+    if (!cb) RET(DP_OK, 2);
+    uint8_t *mem = hle_alloc(16 + 32);
+    memcpy(mem, SP_ONLINE, 16);
+    strcpy((char *)mem + 16, "Online (aoe2-on-browser)");
+    uint32_t args[5] = { hle_va(mem), hle_va(mem) + 16, 6, 0, ctx };
+    hle_call_guest(cb, 5, args);
+    RET(DP_OK, 2);
+}
 static void s_DirectPlayLobbyCreateA(void) {            /* (guid, &out, outer, data, size) */
     TRACE("DirectPlayLobbyCreateA\n");
     if (A32(1)) MEM32(A32(1)) = new_lobby();
