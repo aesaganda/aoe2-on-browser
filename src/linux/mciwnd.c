@@ -167,10 +167,18 @@ static void m_MCIWndCreateA(void) {
     char host[1024], mpg[1040];
     if (getenv("AOE2_SKIP_VIDEOS") && strcmp(getenv("AOE2_SKIP_VIDEOS"), "0")) RET(0, 0);   /* as if not installed */
     if (V.hwnd) { uint32_t a[1] = { V.hwnd }; call("DestroyWindow", 1, a); }
-    if (!hle_host_path(file, host, sizeof host)) { fprintf(stderr, "[video] %s: not found\n", file); RET(0, 0); }
-    snprintf(mpg, sizeof mpg, "%s", host);
-    char *dot = strrchr(mpg, '.');
-    if (dot) strcpy(dot, ".mpg");
+    /* The MPEG-1 copy, by its own guest path: in the browser only the copy is there
+     * (web/page.js leaves the AVIs out), and the lookup matches its case. */
+    char guest_mpg[1040];
+    snprintf(guest_mpg, sizeof guest_mpg, "%s", file);
+    char *gdot = strrchr(guest_mpg, '.');
+    if (gdot && !strchr(gdot, '\\')) strcpy(gdot, ".mpg");
+    if (!hle_host_path(guest_mpg, mpg, sizeof mpg)) {
+        if (!hle_host_path(file, host, sizeof host)) { fprintf(stderr, "[video] %s: not found\n", file); RET(0, 0); }
+        snprintf(mpg, sizeof mpg, "%s", host);           /* the AVI is there: name its copy beside it */
+        char *dot = strrchr(mpg, '.');
+        if (dot) strcpy(dot, ".mpg");
+    }
     plm_t *plm = plm_create_with_filename(mpg);
     if (!plm || !plm_probe(plm, 5000 * 1024)) {
         fprintf(stderr, "[video] %s: no MPEG-1 copy (%s); run tools/transcode_videos.sh on the install\n", file, mpg);
