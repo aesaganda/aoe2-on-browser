@@ -12,7 +12,7 @@ The Definitive Edition is out of scope.
 - **Phase 0 is done**: the verdict was GO (`docs/phase0-report.md`).
 - **Phase 1 is done**: a native Linux binary plays the game, with menus, single-player games, chat, minimap, sound, music and the intro videos (`docs/phase1-bringup.md`).
 - **Determinism:** the lifted build matches the original executable. A 403 s game the original recorded under Wine replays with 10 of 10 world checksums matching, and it holds the other way round too (`tools/oracle/`).
-- **Phase 2 is under way**: the game runs in Chromium as WebAssembly, menus and a game at about 66 fps (`docs/phase2-web.md`).
+- **Phase 2 is under way**: the game runs in the browser as WebAssembly, menus and a game at about 66 fps. Chrome, Edge, Firefox and Safari are supported (`docs/phase2-web.md`).
 - **Phase 3 is under way**: multiplayer runs through a relay server. The web page lists the open games, and hosting or joining one takes a single click. Browser and native games have played each other (`docs/phase3-multiplayer.md`, ADR-0006).
 
 The lifter is [pcrecomp](https://github.com/sp00nznet/pcrecomp) (MIT), pinned as a submodule (ADR-0001). Clone with `--recursive`, or run `git submodule update --init`.

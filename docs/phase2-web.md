@@ -46,8 +46,17 @@ on 24 cores.
 
 ## Open
 
-- The intro videos did not start in the browser (no 640×480×16 mode switch was logged); to check.
+- The intro videos did not start in the browser (no 640×480×16 mode switch was logged);
+  `AOE2_TRACE_VIDEO=1` is now on in the browser env — check the console for `[video]` lines.
 - Sound: web audio starts; not yet listened to.
-- Save games and recordings in OPFS across reloads; the determinism check in the browser.
-- Firefox and Safari (no `showDirectoryPicker`; OPFS writes from the main thread).
+- The determinism check in the browser.
 - Phase 3: DirectPlay over WebRTC.
+
+## Done (2026-11-18)
+
+- **Firefox and Safari**: the `<input webkitdirectory>` fallback lets those browsers
+  pick the install folder. `showDirectoryPicker` is still preferred where it exists
+  (Chrome/Edge). The file API's `webkitRelativePath` provides the directory structure.
+- **Save games and recordings** persist in OPFS across reloads — the game writes to
+  `C:\SaveGame\` which maps to `/opfs/aoe2/SaveGame/`. The page shows the count of
+  `.mgl`/`.mgx` files on the lobby screen.
