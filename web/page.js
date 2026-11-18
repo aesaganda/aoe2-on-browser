@@ -226,7 +226,8 @@ async function listRooms() {
     if (!r.ok) throw new Error(r.status);
     rooms = (await r.json()).rooms;
     consecutiveFails = 0;
-    setStatus(true, 'connected');
+    const total = rooms.reduce((s, r) => s + r.players.length, 0);
+    setStatus(true, total ? `${total} online` : 'connected');
   } catch {
     consecutiveFails++;
     if (consecutiveFails >= 2) setStatus(false, 'offline');
@@ -376,7 +377,11 @@ $('play').onclick = () => play();
 $('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
 $('fullscreen-btn').onclick = toggleFullscreen;
 $('canvas').addEventListener('contextmenu', (e) => e.preventDefault());
+$('help-link').onclick = (e) => { e.preventDefault(); $('help-overlay').hidden = false; };
+$('help-close').onclick = () => { $('help-overlay').hidden = true; };
+$('help-overlay').onclick = (e) => { if (e.target === $('help-overlay')) $('help-overlay').hidden = true; };
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('help-overlay').hidden) { $('help-overlay').hidden = true; return; }
   if (e.key === 'F11' && $('setup').hidden) { e.preventDefault(); toggleFullscreen(); }
 });
 try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
@@ -395,4 +400,7 @@ if ('serviceWorker' in navigator) {
   }).catch(() => {});
 }
 navigator.storage.persist?.();
+fetch('api/version', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+  if (j.version) $('version').textContent = j.version;
+}).catch(() => {});
 init();

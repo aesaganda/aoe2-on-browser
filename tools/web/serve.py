@@ -26,6 +26,7 @@ import logging
 import os
 import signal
 import socketserver
+import subprocess
 import sys
 import urllib.parse
 
@@ -33,6 +34,13 @@ log = logging.getLogger("serve")
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROOTS = [os.path.join(REPO, "web"), os.path.join(REPO, "build", "web")]
+
+def _git_version():
+    try:
+        return subprocess.check_output(["git", "-C", REPO, "describe", "--always", "--dirty"],
+                                       stderr=subprocess.DEVNULL, timeout=2).decode().strip()
+    except Exception:
+        return None
 
 GZIP_TYPES = {"text/html", "text/javascript", "text/css", "application/json", "application/wasm"}
 GZIP_MIN = 1024
@@ -55,6 +63,14 @@ def manifest(install):
 FAVICON = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00"
            b"\x01\x00\x00\x05\x00\x01\r\n\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+PAGE_404 = b"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Not found</title>
+<style>body{background:#111;color:#ddd;font:16px/1.5 system-ui,sans-serif;display:flex;
+align-items:center;justify-content:center;height:100vh;margin:0}
+a{color:#c9a24a}</style></head>
+<body><div style="text-align:center"><h1>404</h1><p>Nothing here.
+<a href="/">Back to the game</a></p></div></body></html>"""
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -184,6 +200,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/health":
             return self._json_response({"ok": True})
 
+        if path == "/api/version":
+            v = _git_version()
+            return self._json_response({"version": v} if v else {"version": None})
+
         if path == "/api/me":
             is_owner = self._is_owner()
             return self._json_response({"owner": is_owner, "install": bool(self.install) and is_owner})
@@ -226,6 +246,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             return
         super().do_HEAD()
+
+    def send_error(self, code, message=None, explain=None):
+        if code == 404:
+            self.send_response(404)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(PAGE_404)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(PAGE_404)
+            return
+        super().send_error(code, message, explain)
 
     def handle_one_request(self):
         try:
