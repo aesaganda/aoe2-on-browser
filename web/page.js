@@ -145,11 +145,12 @@ async function refresh() {
   $('play').hidden = !ok;
   $('forget').hidden = !ok;
   $('pick').hidden = ok;
-  $('online').hidden = !ok;
+  $('online').hidden = false;
+  $('host').disabled = !ok;
+  $('intro').hidden = ok;
+  $('eula-row').hidden = ok;
   if (ok) {
     $('eula').checked = true;
-    $('eula-row').hidden = true;
-    $('intro').hidden = true;
     $('server').hidden = true;
   } else {
     try { $('server').hidden = !(await fetch('install/manifest.json')).ok; } catch { $('server').hidden = true; }
