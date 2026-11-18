@@ -179,6 +179,21 @@ async function importFolder() {
   log(`Copied ${sized.length} files (${(total / 1e6).toFixed(0)} MB). Ready to play.`);
 }
 
+async function fetchRetry(url, opts, retries = 3) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const r = await fetch(url, opts);
+      if (r.ok) return r;
+      if (r.status >= 400 && r.status < 500) throw new Error(`${url}: ${r.status}`);
+      if (i === retries) throw new Error(`${url}: ${r.status} after ${retries + 1} attempts`);
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      if (i === retries) throw e;
+    }
+    await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+  }
+}
+
 async function importServer() {
   const list = await (await fetch('install/manifest.json')).json();
   const base = await root();
@@ -191,8 +206,7 @@ async function importServer() {
   const prog = progressTracker(total);
   try {
     for (const [p, n] of files) {
-      const r = await fetch('install/' + p.split('/').map(encodeURIComponent).join('/'), { signal: installAbort.signal });
-      if (!r.ok) throw new Error(`${p}: ${r.status}`);
+      const r = await fetchRetry('install/' + p.split('/').map(encodeURIComponent).join('/'), { signal: installAbort.signal });
       await writeFile(base, p, r.body);
       prog.add(n);
     }
@@ -285,10 +299,12 @@ async function listRooms() {
     if (!r.ok) throw new Error(r.status);
     rooms = (await r.json()).rooms;
     const ping = Math.round(performance.now() - t0);
+    const wasOffline = consecutiveFails >= 2;
     consecutiveFails = 0;
     pollBackoff = POLL_MIN;
     const total = rooms.reduce((s, r) => s + r.players.length, 0);
     setStatus(true, total ? `${total} online · ${ping}ms` : `connected · ${ping}ms`);
+    if (wasOffline) log('Reconnected to the game server.');
   } catch {
     consecutiveFails++;
     pollBackoff = Math.min(pollBackoff * 1.5, POLL_MAX);
@@ -446,6 +462,9 @@ async function init() {
 
   const complete = await isComplete();
   if (complete) {
+    const link = document.createElement('link');
+    link.rel = 'preload'; link.href = 'aoe2.wasm'; link.as = 'fetch'; link.crossOrigin = '';
+    document.head.appendChild(link);
     await refresh();
     const params = new URLSearchParams(location.search);
     const joinId = params.get('join');
