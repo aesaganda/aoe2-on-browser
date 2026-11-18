@@ -69,7 +69,7 @@ make web
 python3 tools/web/serve.py --install ~/aoe2-install
 ```
 
-Open http://localhost:8642/, accept the EULA, copy your files into the browser once, and Play. The browser keeps its copy in this site's private storage (ADR-0005). Don't expose `serve.py --install` to a network.
+Open http://localhost:8642/ — on first visit the browser automatically downloads and caches the game files in its private storage (OPFS, ADR-0005), then boots straight into the game. Later visits boot directly.
 
 **Online:** run the relay next to the page:
 
@@ -78,12 +78,12 @@ pip install websockets
 python3 tools/net/relay.py
 ```
 
-The page then shows an Online section:
+Click the **Online** button in the top-right corner while in-game (or on the lobby screen after exiting) to view open games, host a room, or join one:
 - The game list shows who is waiting.
 - "Host a game" and each game's "Join" open the game straight at its Multiplayer Game setup screen.
 - The game's own Multiplayer → Online (aoe2-on-browser) screens work too.
 
-To keep the page and the relay running as services, run `sudo tools/deploy/install-services.sh ~/aoe2-install` (systemd). Native builds reach the relay with `AOE2_RELAY=host:8644`. For players on other machines, put the page and `/relay` behind a proxy, as described in `docs/phase3-multiplayer.md`; that file uses `tailscale serve`. Each player needs their own copy of the game.
+To keep the page and the relay running as services, run `sudo tools/deploy/install-services.sh ~/aoe2-install` (systemd). Native builds reach the relay with `AOE2_RELAY=host:8644`. For players on other machines, put the page and `/relay` behind a proxy, as described in `docs/phase3-multiplayer.md`; that file uses `tailscale serve`.
 
 **Determinism check** (`docs/phase1-bringup.md`):
 

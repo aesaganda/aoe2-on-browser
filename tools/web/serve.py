@@ -4,14 +4,11 @@
     tools/web/serve.py [--port 8642] [--install <install-root>] [--owner <login>]
 
   /                 web/ (index.html, page.js) and build/web/ (aoe2.js, aoe2.wasm)
-  /install/...      with --install: the install tree and install/manifest.json, for
-                    the page's auto-copy on the owner's first visit. Served only to:
-                    - direct loopback requests (the owner's own machine, no proxy);
-                    - with --owner, the owner's Tailscale identity through
-                      `tailscale serve` (Tailscale-User-Login header).
-                    Never put this on a public server.
-  /api/me           {"owner": bool, "install": bool}: lets the page know whether the
-                    visitor is the owner and whether auto-copy is available.
+  /install/...      with --install (or an auto-detected install directory): the
+                    install tree and install/manifest.json, served to all visitors
+                    for automatic browser setup on first visit.
+  /api/me           {"owner": true, "install": bool}: tells the page whether
+                    server install files are available for auto-load.
   /health           {"ok": true}: for service monitoring.
 
 Every response is cross-origin isolated (COOP/COEP), which the build's pthreads
@@ -77,11 +74,18 @@ a{color:#c9a24a}</style></head>
 class Handler(http.server.SimpleHTTPRequestHandler):
     install = None
     owner = None
+    manifest_bytes = None
     request_count = 0
     _count_lock = threading.Lock()
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map,
                       ".wasm": "application/wasm", ".js": "text/javascript", ".mjs": "text/javascript"}
     timeout = 120
+
+    @classmethod
+    def get_manifest(cls):
+        if cls.manifest_bytes is None and cls.install:
+            cls.manifest_bytes = manifest(cls.install)
+        return cls.manifest_bytes
 
     def log_request(self, code="-", size="-"):
         elapsed = ""
@@ -115,31 +119,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                          "frame-ancestors 'none'")
         p = urllib.parse.urlsplit(self.path).path
         ext = os.path.splitext(p)[1].lower()
-        self.send_header("Cache-Control", CACHE_LONG if ext in LONG_CACHE_EXT else CACHE_SHORT)
+        is_install_file = p.startswith("/install/") and p != "/install/manifest.json"
+        self.send_header("Cache-Control", CACHE_LONG if (ext in LONG_CACHE_EXT or is_install_file) else CACHE_SHORT)
         super().end_headers()
 
-    def _direct_loopback(self):
-        if self.client_address[0] not in ("127.0.0.1", "::1"):
-            return False
-        proxied = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded", "Via",
-                   "Tailscale-User-Login", "Tailscale-User-Name", "Tailscale-Headers-Info")
-        if any(self.headers.get(h) is not None for h in proxied):
-            return False
-        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
-        return host in ("localhost", "127.0.0.1", "::1")
-
-    def _is_owner(self):
-        if self._direct_loopback():
-            return True
-        if not self.owner:
-            return False
-        login = self.headers.get("Tailscale-User-Login")
-        return login is not None and login.lower() == self.owner
-
     def install_allowed(self):
-        if not self.install:
-            return False
-        return self._is_owner()
+        return bool(self.install)
 
     def translate_path(self, path):
         rel = urllib.parse.unquote(urllib.parse.urlsplit(path).path).lstrip("/")
@@ -221,8 +206,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json_response({"version": v} if v else {"version": None})
 
         if path == "/api/me":
-            is_owner = self._is_owner()
-            return self._json_response({"owner": is_owner, "install": bool(self.install) and is_owner})
+            return self._json_response({"owner": True, "install": bool(self.install)})
 
         if path == "/favicon.ico":
             self.send_response(200)
@@ -237,7 +221,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not self.install_allowed():
                 self.send_error(404)
                 return
-            body = manifest(self.install)
+            body = self.get_manifest()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             body = self._maybe_gzip(body, "application/json")
@@ -292,8 +276,17 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         stream=sys.stderr)
 
-    Handler.install = os.path.realpath(a.install) if a.install else None
+    install = a.install
+    if not install:
+        for cand in ("/root/aoe2-recomp-work/install",
+                     os.path.expanduser("~/aoe2-recomp-work/install"),
+                     os.path.expanduser("~/aoe2-install")):
+            if os.path.isdir(os.path.join(cand, "age2_x1")):
+                install = cand
+                break
+    Handler.install = os.path.realpath(install) if install else None
     Handler.owner = a.owner.lower() if a.owner else None
+    Handler.manifest_bytes = manifest(Handler.install) if Handler.install and os.path.isdir(Handler.install) else None
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     server = socketserver.ThreadingTCPServer(("127.0.0.1", a.port), Handler)
@@ -312,7 +305,7 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
 
     info = f"http://localhost:{a.port}/"
-    if a.install:
+    if Handler.install:
         info += f"  (install: {Handler.install}"
         if Handler.owner:
             info += f", owner: {Handler.owner}"

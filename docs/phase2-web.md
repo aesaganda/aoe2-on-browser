@@ -8,12 +8,10 @@ make web                           # build/web/aoe2.js + aoe2.wasm (43 MB)
 python3 tools/web/serve.py --install ~/aoe2-recomp-work/install    # http://localhost:8642/
 ```
 
-On the page:
-1. tick the EULA box;
-2. "Copy from this server" (or "Choose your install folder…");
-3. Play.
-
-The copy goes into the browser's origin private file system once (ADR-0005).
+Open `http://localhost:8642/`:
+- On the first visit, the page automatically streams the install files from `/install/` into the browser's origin private file system (OPFS, ADR-0005) with a progress bar and boots straight into the game.
+- On return visits, the cached OPFS copy boots directly without downloading the install files again.
+- Use the **Online** button in the top-right corner of the game (or exit the game) to open the multiplayer room list.
 
 ## Build
 

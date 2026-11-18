@@ -4,9 +4,9 @@
 #   sudo tools/deploy/install-services.sh <install-root> [<owner-login>]
 #   sudo tools/deploy/install-services.sh --remove
 #
-#   <owner-login> is the Tailscale login (email) of the owner. With it, the owner's
-#   browser auto-loads the game on first visit through the tailnet. Without it, the
-#   install is served only to direct loopback requests (this machine's browser).
+#   --install serves the game's files automatically to all visitors on first visit,
+#   so the page boots straight into the game (like play-cs.com). <owner-login> is
+#   optional and accepted for backwards compatibility.
 #
 #   aoe2-relay.service  tools/net/relay.py      ws 127.0.0.1:8643/relay, tcp 127.0.0.1:8644
 #   aoe2-web.service    tools/web/serve.py      the page on 127.0.0.1:8642; with the
