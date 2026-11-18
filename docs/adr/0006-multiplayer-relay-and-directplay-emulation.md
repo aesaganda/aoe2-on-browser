@@ -51,11 +51,13 @@ Option 1. Option 2 can be added later behind the same `net.h` interface.
   - "Host a game" launches the game as DirectPlay lobby software would (its `LOBBY`
     switch, `IDirectPlayLobby::Connect`). The game creates the room and goes straight
     to the Multiplayer Game setup screen.
-  - "Join" starts the game and shows a hint to join through the game's own screens:
-    Multiplayer → Online → Show Games → the room → Join. A lobby-launched join gets
-    as far as the room but stops at "Setting up multiplayer game…": the guest never
-    sends the game's own join request, the 8-byte message of type 0x41 that a normal
-    join sends to the host first. See `docs/phase3-multiplayer.md`.
+  - "Join" launches the game the same way, joining that room. The guest lands on the
+    same screen.
+  - Our lobby object answers the game's request for "preset data"
+    (`DPLSYS_GETPROPERTY`) with "not supported". Without that answer, the game waits
+    30 s on "Setting up multiplayer game…" before going on
+    (`docs/phase3-multiplayer.md`).
+  - The game's own screens (Multiplayer → Online → Show Games) work too.
 
 ## Consequences
 
@@ -66,6 +68,8 @@ Option 1. Option 2 can be added later behind the same `net.h` interface.
 - The relay does not interpret game messages, so it cannot cheat for anyone, and
   it cannot stop a desynced or modified client. Out-of-sync detection is the game's
   own.
-- Joining takes four clicks in the game until the lobby-launched join is fixed.
+- The page reaches a game through the lobby launch alone. Whatever else the game
+  might ask a real lobby (MSN Gaming Zone presets, restoring saved games) is answered
+  "not supported".
 - The relay trusts every client: anyone who reaches it can create rooms and join
   open ones. That is acceptable on a tailnet, and not on the internet.

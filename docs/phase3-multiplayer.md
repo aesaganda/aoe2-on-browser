@@ -43,7 +43,8 @@ AOE2_ARGS=LOBBY AOE2_LOBBY=host AOE2_ROOM="My game" AOE2_PLAYER=Alice build/nati
 | native | native | in-game Create / Show Games → Join | lobby, chat, ready, game started |
 | native | browser | in-game | game started |
 | browser, "Host a game" on the page | native | guest in-game | setup screen in ~30 s, guest joined, game started on both |
-| native, lobby launch | — | | straight to the setup screen |
+| native, lobby launch | native, lobby launch | `AOE2_LOBBY=host` / `join:<id>` | guest at the setup screen 5–10 s after starting |
+| native, lobby launch | browser, "Join" on the page | one click | guest at the setup screen within 20 s; game started on both |
 
 Not checked yet: two browsers. Two tabs of one browser share one OPFS copy, and
 WASMFS takes exclusive access handles to its files, so that needs two browsers or two
@@ -61,26 +62,38 @@ browser profiles. Also not checked: players on other machines across the tailnet
 - `DPERR_NOTLOBBIED` is `0x8877042E` (MAKE_DPHRESULT(1070)). An earlier guess of
   1000 was wrong.
 
-## Open: joining by lobby launch
+## Lobby launch: the 30-second "Setting up" screen
 
-Here `AOE2_LOBBY=join:<room id>` connects and joins the room. The relay sees the
-player; the host sees them arrive, and messages flow both ways. But the guest stays
-at "Setting up multiplayer game…".
+A lobby-launched game (host or guest) used to sit on "Setting up multiplayer game…"
+for 30 s. At first that looked like a stalled join, because the early tests did not
+wait that long. In the game:
 
-The traces differ in one way. In a normal join, the guest's first message to the
-host is 8 bytes of type `0x41`, which looks like the game's own join request. The
-lobby-launched guest sends only pongs (`0x32`) and broadcasts.
+- `0x431210` runs the lobby launch:
+  1. `0x437160` reads the connection settings and calls `Connect`;
+  2. the host path calls `0x430A40` and sets state `0x7D1`, and the join path logs
+     "Lobby Launched Join." and calls `0x432730`;
+  3. `0x437EF0` sends the lobby a `DPLSYS_GETPROPERTY` (type 7) for the game's
+     "preset data".
+- The caller (`0x5C729F`) then sets `[screen+0x1F84] = 1` and starts a timer.
+  Every frame, `0x5D1637` polls the lobby (`0x437850`, `ReceiveLobbyMessage`) until
+  30 s have passed (`0x7530` ms), then goes on to the setup screen.
+- `0x437DE0` ("satisfyLobbyLaunchCriteria") ends the wait early once both of these
+  are true:
+  - PLAYER_ID_SET: the host has its own slot, or the guest found its own slot in the
+    host's options (`0x42CC72`);
+  - PRESETS_RETRIEVED: a property response has come in (`0x437D25`, `0x437D77`).
+  It then calls `0x5D1DF0`: with 0, a regular launch; with 1, restoring a saved
+  game, which a preset can ask for.
+- The property response is a standard lobby message, not a `DPLMSG_SYSTEM` one: a
+  `DPLMSG_GETPROPERTYRESPONSE` with the request's GUIDs. If its `hr` is not `DP_OK`,
+  the game logs "PresetData not supported" and counts the presets as retrieved.
 
-In the game:
-- `0x437160` handles lobby launch. It calls `GetConnectionSettings` twice, then
-  loops on `Connect` while it returns `DPERR_CONNECTING`, with a 30 s timeout. Then it
-  calls `QueryInterface` and `EnumPlayers` (callback `0x4370D0`).
-- `0x431210` checks whether comm was lobby launched:
-  - the host path calls `0x430A40` and sets state `0x7D1`;
-  - the join path logs "Lobby Launched Join." and calls `0x432730` (which sends
-    `0x17AD`) and `0x437EF0`.
-- `0x437850` handles lobby messages; it only logs the system ones.
+So `dplay_stub.c`'s lobby answers the game's `GETPROPERTY` with `DPERR_UNSUPPORTED`
+from `ReceiveLobbyMessage`. A lobby-launched guest now reaches the setup screen 5–10 s
+after starting, which is about the game's own start-up time.
 
-The next step is to find what the in-game Join screen calls after `Open` to send
-`0x41`, and what state the lobby path skips. Until then the page's Join starts the
-game and shows the in-game way to the room.
+The 8-byte type-`0x41` message seen only in in-game joins is not a join request. It
+is what the game's receive function (`0x42ABB0`) sends to a sender it has no player
+slot for: "who are you?". The host answers with its options (`0x5A`). A
+lobby-launched guest already has the host's slot from `EnumPlayers`, so it never
+needs to ask.
