@@ -214,6 +214,8 @@ async function refresh() {
   const ok = await isComplete();
   $('play').hidden = !ok;
   $('play').textContent = gameRunning ? 'Resume game' : 'Play';
+  $('saves-btn').hidden = !ok;
+  $('import-rec').hidden = !ok;
   $('online').hidden = false;
   $('host').disabled = !ok;
   if (ok) {
@@ -234,6 +236,91 @@ async function refresh() {
   }
 }
 
+// --- FPS counter ---
+let fpsFrames = 0, fpsLast = 0;
+function tickFps() {
+  fpsFrames++;
+  const now = performance.now();
+  if (now - fpsLast >= 1000) {
+    $('fps').textContent = fpsFrames + ' fps';
+    fpsFrames = 0;
+    fpsLast = now;
+  }
+}
+
+// --- Save game management ---
+async function getSaveDir() {
+  const r = await root();
+  try { return await r.getDirectoryHandle('SaveGame'); } catch { return null; }
+}
+
+async function listSaves() {
+  const dir = await getSaveDir();
+  if (!dir) return [];
+  const files = [];
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind !== 'file') continue;
+    const lower = name.toLowerCase();
+    if (lower.endsWith('.mgx') || lower.endsWith('.mgl') || lower.endsWith('.mgz')) {
+      const f = await h.getFile();
+      files.push({ name, size: f.size, modified: f.lastModified, handle: h });
+    }
+  }
+  files.sort((a, b) => b.modified - a.modified);
+  return files;
+}
+
+async function showSaves() {
+  const list = $('saves-list');
+  if (!list.hidden) { list.hidden = true; return; }
+  const files = await listSaves();
+  list.replaceChildren();
+  if (!files.length) { list.textContent = 'No saved games yet.'; list.hidden = false; return; }
+  for (const f of files) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2a2a2a;font-size:13px';
+    const info = document.createElement('span');
+    info.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const sizeMB = (f.size / 1e6).toFixed(1);
+    const date = new Date(f.modified);
+    const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    info.textContent = `${f.name}  (${sizeMB} MB, ${dateStr})`;
+    info.style.color = 'var(--dim)';
+    const dl = document.createElement('button');
+    dl.textContent = 'Download';
+    dl.style.cssText = 'margin:0;padding:2px 8px;font-size:12px';
+    dl.onclick = async () => {
+      const file = await f.handle.getFile();
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url; a.download = f.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    };
+    row.append(info, dl);
+    list.append(row);
+  }
+  list.hidden = false;
+}
+
+async function importRecording() {
+  return new Promise((resolve) => {
+    const input = $('rec-input');
+    input.onchange = async () => {
+      if (!input.files.length) { resolve(); return; }
+      const file = input.files[0];
+      const r = await root();
+      const dir = await r.getDirectoryHandle('SaveGame', { create: true });
+      await writeFileToDir(dir, file.name, file);
+      log(`Imported recording: ${file.name}`);
+      input.value = '';
+      await refresh();
+      resolve();
+    };
+    input.click();
+  });
+}
+
 function presenter(module) {
   const sdl = $('canvas'), scr = $('screen'), ctx = scr.getContext('2d');
   let img = null, firstFrame = true;
@@ -249,7 +336,8 @@ function presenter(module) {
       const r = sdl.getBoundingClientRect(), sx = r.width / cw, sy = r.height / ch;
       Object.assign(scr.style, { left: `${r.left + dx * sx}px`, top: `${r.top + dy * sy}px`, width: `${dw * sx}px`, height: `${dh * sy}px` });
       scr.hidden = false;
-      if (firstFrame) { $('loading').hidden = true; $('game-ui').hidden = false; firstFrame = false; }
+      tickFps();
+      if (firstFrame) { $('loading').hidden = true; $('game-ui').hidden = false; fpsLast = performance.now(); firstFrame = false; }
     },
     ra2Menu(open) { scr.hidden = !!open; },
   };
@@ -395,6 +483,8 @@ function returnToLobby(msg) {
   $('game-ui').hidden = true;
   $('canvas').hidden = true;
   $('screen').hidden = true;
+  $('fps').textContent = '';
+  $('saves-list').hidden = true;
   $('play').textContent = 'Play';
   $('setup').hidden = false;
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -531,6 +621,8 @@ $('online-btn').onclick = () => { if ($('setup').hidden) openOnline(); else clos
 $('play').onclick = () => { if (gameRunning) closeOnline(); else play(); };
 $('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
 $('retry-btn').onclick = () => location.reload();
+$('saves-btn').onclick = showSaves;
+$('import-rec').onclick = importRecording;
 $('fullscreen-btn').onclick = toggleFullscreen;
 $('canvas').addEventListener('contextmenu', (e) => e.preventDefault());
 $('setup').onclick = (e) => { if (gameRunning && e.target === $('setup')) closeOnline(); };

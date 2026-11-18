@@ -73,8 +73,12 @@
     <h1>Age of Empires II: The Conquerors</h1>
     <div id="actions">
       <button id="play">Play</button>
+      <button id="saves-btn" hidden>Saves</button>
+      <button id="import-rec" hidden title="Import a recorded game (.mgx)">Import recording</button>
+      <input type="file" id="rec-input" accept=".mgx,.mgl,.mgz" hidden>
       <span id="save-count" style="font-size:12px;color:var(--dim);margin-left:4px"></span>
     </div>
+    <div id="saves-list" hidden style="margin:8px 0;max-height:200px;overflow:auto"></div>
     <section id="online">
       <h2>Online <span id="status"></span></h2>
       <p><label>Your name <input id="player" maxlength="15" placeholder="Player" autocomplete="off"></label></p>
@@ -97,6 +101,7 @@
   <button id="retry-btn" hidden>Retry</button>
 </div>
 <div id="game-ui" hidden>
+  <span id="fps" style="font:11px ui-monospace,monospace;color:rgba(255,255,255,0.35);padding:2px 6px;user-select:none"></span>
   <button id="online-btn" title="Online rooms">Online</button>
   <button id="fullscreen-btn" title="Fullscreen (F11)">⛶</button>
 </div>
