@@ -12,8 +12,8 @@ The Definitive Edition is out of scope.
 - **Phase 0 is done**: the verdict was GO (`docs/phase0-report.md`).
 - **Phase 1 is done**: a native Linux binary plays the game, with menus, single-player games, chat, minimap, sound, music and the intro videos (`docs/phase1-bringup.md`).
 - **Determinism:** the lifted build matches the original executable. A 403 s game the original recorded under Wine replays with 10 of 10 world checksums matching, and it holds the other way round too (`tools/oracle/`).
-- **Phase 2 is under way**: the game runs in the browser as WebAssembly, menus and a game at about 66 fps. Chrome, Edge, Firefox and Safari are supported (`docs/phase2-web.md`).
-- **Phase 3 is under way**: multiplayer runs through a relay server. The web page lists the open games, and hosting or joining one takes a single click. Browser and native games have played each other (`docs/phase3-multiplayer.md`, ADR-0006).
+- **Phase 2 is done**: the game runs in the browser as WebAssembly, menus and a game at about 66 fps. Chrome, Edge, Firefox and Safari are supported. Auto-load on first visit, save management, audio resume, mute, WASM progress, game timer, wake lock, tab warning, clear cache (`docs/phase2-web.md`).
+- **Phase 3 is done**: multiplayer runs through a WebSocket relay server. The web page lists the open games, and hosting or joining one takes a single click. Browser and native games have played each other. Wake lock, reconnect, ping display, join notifications (`docs/phase3-multiplayer.md`, ADR-0006).
 
 The lifter is [pcrecomp](https://github.com/sp00nznet/pcrecomp) (MIT), pinned as a submodule (ADR-0001). Clone with `--recursive`, or run `git submodule update --init`.
 
@@ -22,7 +22,7 @@ The lifter is [pcrecomp](https://github.com/sp00nznet/pcrecomp) (MIT), pinned as
 | 0 | Recon, tool choice, lifter prototype + differential harness |
 | 1 | Full lift, Win32 shim, native Linux binary |
 | 2 | WASM: DirectDraw -> Canvas, DirectSound -> WebAudio, files -> OPFS |
-| 3 | DirectPlay -> relay server (WebRTC later), game list on the page |
+| 3 | DirectPlay -> WebSocket relay, game list on the page, invite links |
 
 ## You need your own copy of the game
 

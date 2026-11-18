@@ -46,9 +46,8 @@ on 24 cores.
 
 - The intro videos did not start in the browser (no 640×480×16 mode switch was logged);
   `AOE2_TRACE_VIDEO=1` is now on in the browser env — check the console for `[video]` lines.
-- Sound: web audio starts; not yet listened to.
-- The determinism check in the browser.
-- Phase 3: DirectPlay over WebRTC.
+- Sound: web audio starts, autoplay-resume is patched in; not yet listened to.
+- The determinism check in the browser (replay a recorded game and check sync).
 
 ## Done (2026-11-18)
 
@@ -58,3 +57,22 @@ on 24 cores.
 - **Save games and recordings** persist in OPFS across reloads — the game writes to
   `C:\SaveGame\` which maps to `/opfs/aoe2/SaveGame/`. The page shows the count of
   `.mgl`/`.mgx` files on the lobby screen.
+- **Save management**: download saves, import recordings (`.mgx`/`.mgl`/`.mgz`), and
+  delete individual saves from the lobby screen.
+- **Audio context resume**: patches `AudioContext` to resume all suspended contexts on
+  the first user gesture (click / keydown / touchstart).
+- **Mute toggle**: M key or HUD button suspends/resumes all audio contexts.
+- **WASM download progress**: streams the 42 MB `aoe2.wasm` with a live MB counter
+  and progress bar; the SW no longer precaches it on install.
+- **Wake lock**: keeps the screen on during gameplay.
+- **Tab visibility warning**: red banner during gameplay when the tab is in the
+  background.
+- **Game timer**: elapsed time counter in the top-right HUD.
+- **Multiplayer ping display**: color-coded latency (green/yellow/red) during
+  multiplayer games.
+- **Join notifications**: browser notification when a player joins a hosted game.
+- **Clear cache**: footer link to wipe OPFS and SW cache for recovery.
+- **Connection toast**: "Connection lost" / "Connection restored" popups during
+  gameplay.
+- **PWA**: fullscreen display mode, `launch_handler: navigate-existing` so invite
+  links open the existing game window.
