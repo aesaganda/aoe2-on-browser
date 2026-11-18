@@ -60,3 +60,7 @@ DirectSound's one device: a browser has only one.
 - Quality loss from a second lossy encode (`-q:v 2`) is not visible at 320×240.
 - `AOE2_SKIP_VIDEOS=1` turns them off; scripted sessions (`tools/native/session.sh`)
   do so by default, since the intro would take their first clicks.
+- The game plays a video only if its `.avi` exists. The browser copy leaves the AVIs
+  out (ADR-0005), so `web/page.js` writes an empty `.avi` beside each MPEG-1 copy, and
+  `mciwnd.c` looks the copy up by its own path. Until 2026-11-18 the browser played no
+  videos at all. A lobby launch skips them.

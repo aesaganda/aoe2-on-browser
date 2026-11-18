@@ -88,6 +88,21 @@ playing.
 
 Not checked yet: players on other machines across the tailnet.
 
+## Friends' own installs
+
+Every player copies their own install into their browser with "Choose your install
+folder…" (Chrome or Edge). Over the tailnet the page sends the isolation headers
+(COOP/COEP) through `tailscale serve`, so the build runs there.
+
+- **The executable must be the one the code was lifted from**: The Conquerors 1.0,
+  unpatched. `make web` writes its size and SHA-256 to `build/web/aoe2.json`. The page
+  refuses any other `age2_x1.exe` before copying anything, and again before playing.
+  A patched 1.0c exe would otherwise crash, because the lifted code would not match
+  the executable's data.
+- **Videos** play only from the MPEG-1 copies made by `tools/transcode_videos.sh`. A
+  plain Windows install has none, so it plays no videos, and the game carries on
+  without them.
+
 ## The page server and the tailnet
 
 `tools/web/serve.py --install` serves the owner's install tree to the page's "Copy
