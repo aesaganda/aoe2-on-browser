@@ -1,0 +1,58 @@
+--- a/runtime/win32hle/screen.c
++++ b/runtime/win32hle/screen.c
+@@ -300,8 +300,10 @@
+      * game's frame, so the game never went idle. The frame goes as RGB565
+      * in one of two buffers (the page reads it later); the place in the
+      * window is this thread's, so the mouse maps the same way. SDL still
+-     * draws the host's menu (F10), over which the page's canvas hides. */
+-    if (bpp == 16) {
++     * draws the host's menu (F10), over which the page's canvas hides.
++     * An 8 bpp game's frame goes the same way, through its palette; true-colour
++     * content over it (hle_screen_rgb_hook) is composed in XRGB first. */
++    if (bpp == 16 || bpp == 8) {
+         int ww, wh;
+         SDL_GetRendererOutputSize(g_ren, &ww, &wh);
+         if ((long long)ww * h > (long long)wh * w) g_dst.h = wh, g_dst.w = (int)((long long)wh * w / h);
+@@ -325,8 +327,41 @@
+             }
+             which ^= 1;
+             uint16_t *dst = fb[which];
+-            if (dst) {
++            if (dst && bpp == 16 && !rgb) {
+                 for (int y = 0; y < h; y++) memcpy(dst + (size_t)y * w, px + (size_t)y * pitch, (size_t)w * 2);
++            } else if (dst && bpp == 8 && !rgb) {
++                uint16_t lut[256];
++                for (int i = 0; i < 256; i++) {
++                    uint32_t e = pal ? pal[i] : 0;           /* PALETTEENTRY r, g, b */
++                    lut[i] = (uint16_t)(((e & 0xF8) << 8) | ((e >> 5) & 0x7E0) | ((e >> 19) & 0x1F));
++                }
++                for (int y = 0; y < h; y++) {
++                    const uint8_t *s = px + (size_t)y * pitch;
++                    uint16_t *d = dst + (size_t)y * w;
++                    for (int x = 0; x < w; x++) d[x] = lut[s[x]];
++                }
++            } else if (dst) {                                /* XRGB, the hook's content over it, then RGB565 */
++                if (g_conv_n < (size_t)w * h) { free(g_conv); g_conv_n = (size_t)w * h; g_conv = (uint32_t *)malloc(g_conv_n * 4); }
++                if (!g_conv) return;
++                for (int y = 0; y < h; y++)
++                    for (int x = 0; x < w; x++) {
++                        uint32_t c;
++                        if (bpp == 8) {
++                            uint32_t e = pal ? pal[px[(size_t)y * pitch + x]] : 0;
++                            c = (e & 0xFF) << 16 | (e & 0xFF00) | (e >> 16 & 0xFF);
++                        } else {
++                            uint32_t v = ((const uint16_t *)(px + (size_t)y * pitch))[x], r = v >> 11, g = v >> 5 & 63, b = v & 31;
++                            c = (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
++                        }
++                        g_conv[(size_t)y * w + x] = 0xFF000000u | c;
++                    }
++                hle_screen_rgb_hook(g_conv, w, h);
++                for (size_t i = 0; i < (size_t)w * h; i++) {
++                    uint32_t c = g_conv[i];
++                    dst[i] = (uint16_t)(((c >> 8) & 0xF800) | ((c >> 5) & 0x7E0) | ((c >> 3) & 0x1F));
++                }
++            }
++            if (dst) {
+                 web_menu(0);
+                 web_present(dst, w, h, g_dst.x, g_dst.y, g_dst.w, g_dst.h, g_mode, ww, wh);
+             }
