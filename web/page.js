@@ -1,9 +1,9 @@
 // The page around the WebAssembly build (Phase 2, ADR-0005).
 //
-// The game's files are the owner's: they are copied once into the origin private
-// file system (OPFS) under aoe2/, from a folder the owner picks (or, on a dev
-// server, from the install tree it serves), and the module (build/web/aoe2.js)
-// mounts OPFS and runs the game from /opfs/aoe2 (src/web/web_fs.c).
+// On first visit, the game's files are automatically downloaded from the server
+// (/install/...) into the origin private file system (OPFS) under aoe2/, and the
+// module (build/web/aoe2.js) mounts OPFS and runs the game from /opfs/aoe2
+// (src/web/web_fs.c). On subsequent visits the cached OPFS copy boots directly.
 //
 // Not copied: the disc tree (the game only checks that a CD with the right label is
 // there: an empty cdrom/ and cdrom.label stand for it), the AVIs and .cab archives.
@@ -35,6 +35,16 @@ function checkCompat() {
   return issues.length === 0;
 }
 
+function hasRuntimeAPIs() {
+  return Boolean(
+    window.crossOriginIsolated &&
+    'storage' in navigator &&
+    'getDirectory' in navigator.storage &&
+    typeof WebAssembly !== 'undefined' &&
+    window.SharedArrayBuffer
+  );
+}
+
 function skip(path) {
   const p = path.toLowerCase();
   return p.startsWith('cdrom/') || p.endsWith('.avi') || p.endsWith('.cab') || p === 'cdrom.label' || p.split('/').pop() === MARK;
@@ -49,11 +59,15 @@ async function dirOf(base, path, create) {
   return [d, parts[parts.length - 1]];
 }
 
-async function writeFile(base, path, data) {
-  const [d, name] = await dirOf(base, path, true);
-  const f = await d.getFileHandle(name, { create: true });
+async function writeFileToDir(dir, name, data) {
+  const f = await dir.getFileHandle(name, { create: true });
   const w = await f.createWritable();
   if (data instanceof ReadableStream) await data.pipeTo(w); else { await w.write(data); await w.close(); }
+}
+
+async function writeFile(base, path, data) {
+  const [d, name] = await dirOf(base, path, true);
+  await writeFileToDir(d, name, data);
 }
 
 async function videoStandIns(base) {
@@ -79,14 +93,6 @@ async function isComplete() {
   try { await (await root()).getFileHandle(MARK); return true; } catch { return false; }
 }
 
-async function* walk(dir, prefix = '') {
-  for await (const [name, h] of dir.entries()) {
-    const path = prefix + name;
-    if (h.kind === 'directory') yield* walk(h, path + '/');
-    else yield [path, h];
-  }
-}
-
 const EXE_PATH = 'age2_x1/age2_x1.exe';
 async function exeProblem(file) {
   let want;
@@ -108,26 +114,6 @@ async function copiedExe() {
   return null;
 }
 
-function progressTracker(total) {
-  const start = performance.now();
-  let done = 0;
-  return {
-    add(bytes) {
-      done += bytes;
-      $('bar').value = done / total;
-      const elapsed = (performance.now() - start) / 1000;
-      if (elapsed > 1) {
-        const speed = done / elapsed;
-        const left = (total - done) / speed;
-        const mb = (speed / 1e6).toFixed(1);
-        const eta = left < 60 ? `${Math.ceil(left)}s` : `${Math.floor(left / 60)}m ${Math.ceil(left % 60)}s`;
-        $('bar-text').textContent = `${mb} MB/s — ${eta} left`;
-      }
-    },
-    clear() { $('bar-text').textContent = ''; },
-  };
-}
-
 async function checkStorage(needed) {
   if (!navigator.storage.estimate) return;
   const { quota, usage } = await navigator.storage.estimate();
@@ -136,73 +122,8 @@ async function checkStorage(needed) {
     const freeMB = (free / 1e6).toFixed(0);
     const needMB = (needed / 1e6).toFixed(0);
     log(`Not enough storage: ${needMB} MB needed, only ${freeMB} MB available. Free up space or clear site data.`);
-    throw new Error('insufficient storage');
+    throw new Error(`Insufficient browser storage (${needMB} MB needed, ${freeMB} MB available).`);
   }
-}
-
-let installAbort = null;
-
-async function importFromFiles(files) {
-  const exe = files.find(([p]) => p.toLowerCase() === EXE_PATH);
-  if (!exe) {
-    log('That folder has no age2_x1\\age2_x1.exe: pick the folder the game is installed in.');
-    return;
-  }
-  const exeFile = exe[1] instanceof File ? exe[1] : await exe[1].getFile();
-  const problem = await exeProblem(exeFile);
-  if (problem) { log(problem + ' Nothing was copied.'); return; }
-  const base = await root();
-  let total = 0;
-  const sized = [];
-  for (const [p, h] of files) {
-    const f = h instanceof File ? h : await h.getFile();
-    sized.push([p, f]);
-    total += f.size;
-  }
-  await checkStorage(total);
-  installAbort = new AbortController();
-  $('bar').hidden = false;
-  $('cancel').hidden = false;
-  const prog = progressTracker(total);
-  try {
-    for (const [p, f] of sized) {
-      if (installAbort.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-      await writeFile(base, p, f);
-      prog.add(f.size);
-    }
-  } finally {
-    prog.clear();
-    $('bar').hidden = true;
-    $('cancel').hidden = true;
-    installAbort = null;
-  }
-  await finish(base);
-  log(`Copied ${sized.length} files (${(total / 1e6).toFixed(0)} MB). Ready to play.`);
-}
-
-async function importFolder() {
-  if (window.showDirectoryPicker) {
-    const src = await window.showDirectoryPicker({ mode: 'read' });
-    const files = [];
-    for await (const [path, h] of walk(src)) if (!skip(path)) files.push([path, h]);
-    return importFromFiles(files);
-  }
-  return new Promise((resolve, reject) => {
-    const input = $('folder-input');
-    input.onchange = async () => {
-      try {
-        const files = [];
-        for (const f of input.files) {
-          const rel = f.webkitRelativePath.split('/').slice(1).join('/');
-          if (rel && !skip(rel)) files.push([rel, f]);
-        }
-        await importFromFiles(files);
-        resolve();
-      } catch (e) { reject(e); }
-      input.value = '';
-    };
-    input.click();
-  });
 }
 
 async function fetchRetry(url, opts, retries = 3) {
@@ -221,48 +142,81 @@ async function fetchRetry(url, opts, retries = 3) {
 }
 
 async function importServer() {
-  const list = await (await fetch('install/manifest.json')).json();
+  const loadText = $('load-text');
+  const loadBar = $('load-bar');
+  const loadSub = $('load-sub');
+  loadText.textContent = 'Checking game files…';
+  loadBar.hidden = false;
+  loadBar.removeAttribute('value');
+  loadSub.textContent = '';
+
+  const manifestResp = await fetchRetry('install/manifest.json', { cache: 'no-store' });
+  const list = await manifestResp.json();
   const base = await root();
   const files = list.files.filter(([p]) => !skip(p));
   const total = files.reduce((s, [, n]) => s + n, 0);
   await checkStorage(total);
-  installAbort = new AbortController();
-  $('bar').hidden = false;
-  $('cancel').hidden = false;
-  const prog = progressTracker(total);
-  try {
-    for (const [p, n] of files) {
-      const r = await fetchRetry('install/' + p.split('/').map(encodeURIComponent).join('/'), { signal: installAbort.signal });
-      await writeFile(base, p, r.body);
-      prog.add(n);
-    }
-  } finally {
-    prog.clear();
-    $('bar').hidden = true;
-    $('cancel').hidden = true;
-    installAbort = null;
-  }
-  await finish(base);
-  log(`Copied ${files.length} files (${(total / 1e6).toFixed(0)} MB) from the server. Ready to play.`);
-}
 
-async function forget() {
-  await (await navigator.storage.getDirectory()).removeEntry('aoe2', { recursive: true });
-  log('Game files removed.'); await refresh();
+  // Pre-create all directories sequentially so parallel workers never race on getDirectoryHandle(..., { create: true }).
+  const dirs = new Set();
+  for (const [p] of files) {
+    const parts = p.split('/');
+    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+  }
+  const dirHandles = new Map([['', base]]);
+  for (const d of [...dirs].sort((a, b) => a.length - b.length)) {
+    const slash = d.lastIndexOf('/');
+    const parent = dirHandles.get(slash === -1 ? '' : d.slice(0, slash));
+    dirHandles.set(d, await parent.getDirectoryHandle(slash === -1 ? d : d.slice(slash + 1), { create: true }));
+  }
+
+  loadText.textContent = 'Loading game files…';
+  loadBar.value = 0;
+  const start = performance.now();
+  let done = 0;
+
+  const updateProgress = (bytes) => {
+    done += bytes;
+    loadBar.value = total ? done / total : 1;
+    const elapsed = (performance.now() - start) / 1000;
+    if (elapsed > 0.5 && done > 0) {
+      const speed = done / elapsed;
+      const left = Math.max(0, (total - done) / speed);
+      const mb = (speed / 1e6).toFixed(1);
+      const pct = total ? Math.floor((done / total) * 100) : 100;
+      const eta = left < 60 ? `${Math.ceil(left)}s` : `${Math.floor(left / 60)}m ${Math.ceil(left % 60)}s`;
+      loadSub.textContent = `${pct}% · ${mb} MB/s — ${eta} left`;
+    }
+  };
+
+  let idx = 0;
+  const concurrency = Math.min(6, files.length);
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (idx < files.length) {
+      const [p, n] = files[idx++];
+      const r = await fetchRetry('install/' + p.split('/').map(encodeURIComponent).join('/'));
+      const slash = p.lastIndexOf('/');
+      const dir = dirHandles.get(slash === -1 ? '' : p.slice(0, slash));
+      const name = slash === -1 ? p : p.slice(slash + 1);
+      await writeFileToDir(dir, name, r.body);
+      updateProgress(n);
+    }
+  });
+  await Promise.all(workers);
+
+  loadText.textContent = 'Finalizing game files…';
+  loadSub.textContent = '';
+  await finish(base);
+  log(`Loaded ${files.length} files (${(total / 1e6).toFixed(0)} MB) from the server.`);
 }
 
 async function refresh() {
   const ok = await isComplete();
   $('play').hidden = !ok;
-  $('forget').hidden = !ok;
-  $('pick').hidden = ok;
+  $('play').textContent = gameRunning ? 'Resume game' : 'Play';
   $('online').hidden = false;
   $('host').disabled = !ok;
-  $('intro').hidden = ok;
-  $('eula-row').hidden = ok;
   if (ok) {
-    $('eula').checked = true;
-    $('server').hidden = true;
     try {
       let saves = 0;
       const r = await root();
@@ -273,12 +227,10 @@ async function refresh() {
       $('save-count').textContent = saves ? `${saves} saved game${saves > 1 ? 's' : ''}` : '';
     } catch { /* no SaveGame dir yet */ }
     try {
-      const { quota, usage } = await navigator.storage.estimate();
+      const { usage } = await navigator.storage.estimate();
       const usedMB = (usage / 1e6).toFixed(0);
       $('storage-info').textContent = `${usedMB} MB used`;
     } catch {}
-  } else {
-    try { $('server').hidden = !(await fetch('install/manifest.json')).ok; } catch { $('server').hidden = true; }
   }
 }
 
@@ -420,34 +372,69 @@ window.addEventListener('offline', () => {
   setStatus(false, 'no network');
 });
 
+let gameRunning = false;
+
+function openOnline() {
+  if (!$('setup').hidden) return;
+  $('play').textContent = gameRunning ? 'Resume game' : 'Play';
+  $('setup').hidden = false;
+  refresh();
+  startRoomPolling();
+}
+
+function closeOnline() {
+  if ($('setup').hidden) return;
+  $('setup').hidden = true;
+  stopRoomPolling();
+  if (gameRunning) $('canvas').focus();
+}
+
 function returnToLobby(msg) {
+  gameRunning = false;
   $('loading').hidden = true;
   $('game-ui').hidden = true;
   $('canvas').hidden = true;
   $('screen').hidden = true;
+  $('play').textContent = 'Play';
   $('setup').hidden = false;
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  refresh();
   startRoomPolling();
   if (msg) log(msg);
 }
 
 async function play(launch) {
-  if (!crossOriginIsolated) { log('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
-  if (!$('eula').checked) { log('Accept the license agreement first (the checkbox above).'); return; }
+  if (gameRunning) {
+    const u = new URL(location.href);
+    if (launch && launch.lobby === 'host') {
+      u.search = `?host=1&room=${encodeURIComponent(launch.room || '')}`;
+    } else if (launch && launch.lobby && launch.lobby.startsWith('join:')) {
+      u.search = `?join=${encodeURIComponent(launch.lobby.slice(5))}&room=${encodeURIComponent(launch.room || '')}`;
+    } else {
+      u.search = '';
+    }
+    location.href = u.toString();
+    return;
+  }
+  if (!crossOriginIsolated) { returnToLobby('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
   const exe = await copiedExe().catch(() => null);
-  const problem = exe ? await exeProblem(exe) : 'The copy in this browser has no age2_x1\\age2_x1.exe.';
-  if (problem) { log(problem + ' Remove the copy and copy a matching install.'); return; }
+  const problem = exe ? await exeProblem(exe) : 'The browser cache has no age2_x1\\age2_x1.exe.';
+  if (problem) { returnToLobby(problem); return; }
   await videoStandIns(await root()).catch(() => {});
+  gameRunning = true;
   stopRoomPolling();
   $('setup').hidden = true;
   $('loading').hidden = false;
   const loadBar = $('load-bar');
   const loadText = $('load-text');
+  const loadSub = $('load-sub');
+  loadBar.hidden = false;
   loadBar.value = 0;
+  loadText.textContent = 'Starting the game…';
+  loadSub.textContent = '';
+  $('retry-btn').hidden = true;
   const canvas = $('canvas');
   canvas.hidden = false; canvas.focus();
-  const s = document.createElement('script');
-  s.src = 'aoe2.js';
   const config = {
     canvas,
     arguments: [],
@@ -480,123 +467,89 @@ async function play(launch) {
     printErr: (t) => console.warn(t),
   };
   Object.assign(config, presenter(config));
-  s.onload = () => AoE2(config).then(
+  const startWasm = () => AoE2(config).then(
     () => returnToLobby('The game exited.'),
     (e) => returnToLobby('The game stopped: ' + e)
   );
-  s.onerror = () => returnToLobby('Failed to load the game engine. Try refreshing the page.');
-  document.body.appendChild(s);
-}
-
-const guard = (f) => async () => {
-  for (const b of document.querySelectorAll('button')) b.disabled = true;
-  try { await f(); } catch (e) {
-    if (e.name === 'AbortError') log('Cancelled.');
-    else { log('Error: ' + e.message); console.error(e); }
+  if (typeof AoE2 === 'function') {
+    startWasm();
+  } else {
+    const s = document.createElement('script');
+    s.src = 'aoe2.js';
+    s.onload = startWasm;
+    s.onerror = () => returnToLobby('Failed to load the game engine. Try refreshing the page.');
+    document.body.appendChild(s);
   }
-  for (const b of document.querySelectorAll('button')) b.disabled = false;
-  await refresh();
-};
+}
 
 async function init() {
   checkCompat();
-
-  const complete = await isComplete();
-  if (complete) {
-    const link = document.createElement('link');
-    link.rel = 'preload'; link.href = 'aoe2.wasm'; link.as = 'fetch'; link.crossOrigin = '';
-    document.head.appendChild(link);
-    await refresh();
-    const params = new URLSearchParams(location.search);
-    const joinId = params.get('join');
-    if (joinId) {
-      history.replaceState(null, '', location.pathname);
-      log('Joining game from invite link…');
-      play({ lobby: 'join:' + joinId, room: params.get('room') || '' });
-      return;
-    }
-    startRoomPolling();
+  if (!hasRuntimeAPIs()) {
+    $('load-text').textContent = 'Browser not supported';
+    $('load-bar').hidden = true;
     return;
   }
 
-  let me = { owner: false, install: false };
-  try { me = await (await fetch('api/me', { cache: 'no-store' })).json(); } catch {}
+  const params = new URLSearchParams(location.search);
+  const joinId = params.get('join');
+  const hostParam = params.get('host');
+  const roomParam = params.get('room') || '';
+  let launch;
+  if (joinId) {
+    history.replaceState(null, '', location.pathname);
+    launch = { lobby: 'join:' + joinId, room: roomParam };
+    log('Joining game from invite link…');
+  } else if (hostParam) {
+    history.replaceState(null, '', location.pathname);
+    launch = { lobby: 'host', room: (roomParam || `${playerName()}'s game`).slice(0, 30) };
+  }
 
-  if (me.owner && me.install) {
-    $('eula').checked = true;
-    $('eula-row').hidden = true;
-    $('intro').textContent = 'Loading your game…';
-    $('pick').hidden = true;
+  const exe = await copiedExe().catch(() => null);
+  const complete = (await isComplete()) && Boolean(exe) && !(await exeProblem(exe));
+
+  if (!complete) {
     try {
       await importServer();
-      await refresh();
     } catch (e) {
+      $('load-text').textContent = 'Failed to load game files';
+      $('load-sub').textContent = e.message || String(e);
+      $('load-bar').hidden = true;
+      $('retry-btn').hidden = false;
       log('Could not load automatically: ' + e.message);
-      $('intro').textContent = 'Pick your install folder to get started.';
-      $('eula-row').hidden = false;
-      await refresh();
+      return;
     }
-    startRoomPolling();
-    return;
   }
 
+  const link = document.createElement('link');
+  link.rel = 'preload'; link.href = 'aoe2.wasm'; link.as = 'fetch'; link.crossOrigin = '';
+  document.head.appendChild(link);
   await refresh();
-  startRoomPolling();
+  await play(launch);
 }
 
-async function walkEntries(entry, prefix = '') {
-  if (entry.isFile) {
-    return new Promise((res) => entry.file((f) => res([[prefix + entry.name, f]])));
-  }
-  if (entry.isDirectory) {
-    const reader = entry.createReader();
-    const all = [];
-    const readBatch = () => new Promise((res) => reader.readEntries(res));
-    let batch;
-    do { batch = await readBatch(); for (const e of batch) all.push(...await walkEntries(e, prefix + entry.name + '/')); } while (batch.length);
-    return all;
-  }
-  return [];
-}
-
-async function handleDrop(e) {
-  e.preventDefault();
-  $('setup').classList.remove('drop-active');
-  if (await isComplete()) return;
-  const items = [...e.dataTransfer.items].filter((i) => i.kind === 'file');
-  if (!items.length) return;
-  const first = items[0];
-  if (first.getAsFileSystemHandle) {
-    const handle = await first.getAsFileSystemHandle();
-    if (handle.kind !== 'directory') { log('Drop a folder, not a single file.'); return; }
-    const files = [];
-    for await (const [path, h] of walk(handle)) if (!skip(path)) files.push([path, h]);
-    return guard(() => importFromFiles(files))();
-  }
-  const entry = first.webkitGetAsEntry?.();
-  if (entry && entry.isDirectory) {
-    const files = (await walkEntries(entry)).filter(([p]) => !skip(p));
-    return guard(() => importFromFiles(files))();
-  }
-  log('Drop your game install folder here.');
-}
-
-$('setup').addEventListener('dragover', (e) => { e.preventDefault(); $('setup').classList.add('drop-active'); });
-$('setup').addEventListener('dragleave', () => $('setup').classList.remove('drop-active'));
-$('setup').addEventListener('drop', handleDrop);
-$('pick').onclick = guard(importFolder);
-$('server').onclick = guard(importServer);
-$('forget').onclick = guard(forget);
-$('cancel').onclick = () => { if (installAbort) installAbort.abort(); };
-$('play').onclick = () => play();
+$('online-btn').onclick = () => { if ($('setup').hidden) openOnline(); else closeOnline(); };
+$('play').onclick = () => { if (gameRunning) closeOnline(); else play(); };
 $('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
+$('retry-btn').onclick = () => location.reload();
 $('fullscreen-btn').onclick = toggleFullscreen;
 $('canvas').addEventListener('contextmenu', (e) => e.preventDefault());
+$('setup').onclick = (e) => { if (gameRunning && e.target === $('setup')) closeOnline(); };
+for (const evt of ['keydown', 'keyup', 'keypress']) {
+  $('setup').addEventListener(evt, (e) => {
+    if (!gameRunning) return;
+    if (evt === 'keydown' && e.key === 'Escape' && $('help-overlay').hidden) {
+      e.preventDefault();
+      closeOnline();
+    }
+    e.stopPropagation();
+  });
+}
 $('help-link').onclick = (e) => { e.preventDefault(); $('help-overlay').hidden = false; $('help-close').focus(); };
 $('help-close').onclick = () => { $('help-overlay').hidden = true; $('help-link').focus(); };
 $('help-overlay').onclick = (e) => { if (e.target === $('help-overlay')) { $('help-overlay').hidden = true; $('help-link').focus(); } };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('help-overlay').hidden) { $('help-overlay').hidden = true; return; }
+  if (e.key === 'Escape' && gameRunning && !$('setup').hidden) { closeOnline(); return; }
   if (e.key === 'F11' && $('setup').hidden) { e.preventDefault(); toggleFullscreen(); }
 });
 try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}

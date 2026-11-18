@@ -379,6 +379,19 @@ async def main():
         if p.endswith("/health"):
             body = json.dumps({"ok": True, "rooms": len(relay.rooms), "connections": relay.conn_count}).encode()
             return (http.HTTPStatus.OK, [("Content-Type", "application/json"), ("Cache-Control", "no-store")], body)
+        if p.endswith("/stats"):
+            now = time.monotonic()
+            rooms_info = []
+            for r in relay.rooms.values():
+                rooms_info.append({
+                    "name": r.name.decode("cp1252", "replace"),
+                    "players": len(r.players),
+                    "conns": len(r.conns),
+                    "age_s": int(now - r.created),
+                    "idle_s": int(now - r.last_active),
+                })
+            body = json.dumps({"connections": relay.conn_count, "rooms": rooms_info, "max_conns": MAX_CONNS, "max_rooms": MAX_ROOMS}).encode()
+            return (http.HTTPStatus.OK, [("Content-Type", "application/json"), ("Cache-Control", "no-store")], body)
         if not p.endswith("/rooms"):
             return None
         rooms = []
@@ -399,7 +412,8 @@ async def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
 
-    async with websockets.serve(ws_handler, a.host, a.ws_port, max_size=MAX_FRAME, process_request=process_request):
+    async with websockets.serve(ws_handler, a.host, a.ws_port, max_size=MAX_FRAME, process_request=process_request,
+                                ping_interval=20, ping_timeout=10):
         tcp = await asyncio.start_server(tcp_handler, a.host, a.tcp_port)
         log.info("relay: ws://%s:%d/relay (browser), tcp %s:%d (native)", a.host, a.ws_port, a.host, a.tcp_port)
         async with tcp:

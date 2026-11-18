@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Age of Empires II: The Conquerors, recompiled to run in the browser.">
+<meta name="description" content="Age of Empires II: The Conquerors, recompiled to run directly in the browser.">
 <meta name="theme-color" content="#c9a24a">
 <meta property="og:title" content="Age of Empires II — browser build">
-<meta property="og:description" content="The Conquerors 1.0, recompiled to WebAssembly. Play in your browser with your own copy.">
+<meta property="og:description" content="Age of Empires II: The Conquerors 1.0, recompiled to WebAssembly. Play directly in your browser.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="icon-512.png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -17,8 +17,10 @@
 <style>
   :root { color-scheme: dark; --bg: #111; --fg: #ddd; --dim: #888; --accent: #c9a24a; --err: #e45; --ok: #5b5; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
-  #setup { max-width: 640px; margin: 8vh auto; padding: 0 16px; }
-  h1 { font-size: 20px; color: var(--accent); margin: 0 0 8px; }
+  #setup { position: fixed; inset: 0; z-index: 25; background: rgba(17, 17, 17, 0.92); overflow: auto; padding: 6vh 16px; }
+  #setup[hidden] { display: none; }
+  #setup-panel { max-width: 640px; margin: 0 auto; background: #181818; border: 1px solid #333; border-radius: 8px; padding: 20px 24px; }
+  h1 { font-size: 20px; color: var(--accent); margin: 0 0 12px; }
   p { color: var(--dim); }
   button { font: inherit; padding: 8px 14px; margin: 4px 8px 4px 0; background: #2a2a2a; color: var(--fg); border: 1px solid #444; border-radius: 4px; cursor: pointer; transition: border-color 0.15s; }
   button:hover:not(:disabled) { border-color: var(--accent); }
@@ -37,12 +39,14 @@
   #status.ok { color: var(--ok); }
   #status.err { color: var(--err); }
   .dimmed { opacity: 0.5; pointer-events: none; }
-  .drop-active { outline: 2px dashed var(--accent); outline-offset: -4px; border-radius: 8px; }
-  #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg); color: var(--dim); font: 16px system-ui, sans-serif; z-index: 10; }
-  #loading progress { width: 200px; }
-  .warn { background: #332200; border: 1px solid #664400; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #ffcc66; font-size: 13px; }
-  #game-ui { position: fixed; top: 8px; right: 8px; z-index: 20; display: flex; gap: 6px; }
-  #game-ui button { margin: 0; padding: 4px 10px; font-size: 18px; background: rgba(0,0,0,0.5); border-color: rgba(255,255,255,0.15); opacity: 0.3; transition: opacity 0.2s; }
+  #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--bg); color: var(--fg); font: 16px system-ui, sans-serif; z-index: 10; padding: 16px; text-align: center; }
+  #loading[hidden] { display: none; }
+  #loading progress { width: 260px; max-width: 80vw; }
+  #load-sub { font-size: 12px; color: var(--dim); min-height: 1.4em; }
+  .warn { background: #332200; border: 1px solid #664400; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #ffcc66; font-size: 13px; max-width: 520px; }
+  #game-ui { position: fixed; top: 8px; right: 8px; z-index: 20; display: flex; align-items: center; gap: 6px; }
+  #game-ui button { margin: 0; padding: 4px 10px; font-size: 13px; line-height: 20px; background: rgba(0,0,0,0.55); border-color: rgba(255,255,255,0.15); opacity: 0.45; transition: opacity 0.2s; }
+  #game-ui #fullscreen-btn { font-size: 16px; }
   #game-ui button:hover { opacity: 1; border-color: var(--accent); }
   #game-ui[hidden] { display: none; }
   footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #2a2a2a; font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; align-items: center; }
@@ -56,49 +60,44 @@
   #help-box dt { color: var(--fg); font: 13px ui-monospace, monospace; }
   #help-box dd { margin: 0; color: var(--dim); font-size: 13px; }
   @media (max-width: 600px) {
-    #setup { margin: 4vh auto; }
+    #setup { padding: 3vh 12px; }
+    #setup-panel { padding: 16px; }
     h1 { font-size: 17px; }
     .room { flex-wrap: wrap; }
   }
 </style>
 </head>
 <body>
-<div id="setup">
-  <h1>Age of Empires II: The Conquerors — browser build</h1>
+<div id="setup" hidden>
+  <div id="setup-panel">
+    <h1>Age of Empires II: The Conquerors</h1>
+    <div id="actions">
+      <button id="play">Play</button>
+      <span id="save-count" style="font-size:12px;color:var(--dim);margin-left:4px"></span>
+    </div>
+    <section id="online">
+      <h2>Online <span id="status"></span></h2>
+      <p><label>Your name <input id="player" maxlength="15" placeholder="Player" autocomplete="off"></label></p>
+      <p><input id="roomname" maxlength="30" placeholder="Game name" autocomplete="off"> <button id="host">Host a game</button></p>
+      <div id="rooms" role="list">…</div>
+    </section>
+    <div id="log" role="log" aria-live="polite"></div>
+    <footer>
+      <span><span id="version"></span> <span id="storage-info" style="margin-left:8px"></span></span>
+      <a href="#" id="help-link">Keyboard shortcuts</a>
+    </footer>
+  </div>
+</div>
+<div id="loading">
   <noscript><p style="color:var(--err)">This page needs JavaScript to run the game.</p></noscript>
   <div id="compat-warn" hidden class="warn"></div>
-  <p id="intro">Pick your installed copy of <strong>The Conquerors 1.0</strong> below, or drag the folder here — it is copied once into this
-    browser (about 0.5 GB) and stays on this computer. After that, every visit goes straight to the game.</p>
-  <p id="eula-row"><label><input type="checkbox" id="eula"> I accept the game's End User License Agreement
-    (<code>eulax.rtf</code> in your install), as its own setup asks.</label></p>
-  <div id="actions">
-    <button id="pick">Choose your install folder…</button>
-    <button id="server" hidden>Copy from this server</button>
-    <button id="play" hidden>Play alone</button>
-    <button id="forget" hidden>Remove the copy</button>
-    <span id="save-count" style="font-size:12px;color:var(--dim);margin-left:4px"></span>
-    <button id="cancel" hidden>Cancel</button>
-    <input type="file" id="folder-input" webkitdirectory hidden>
-  </div>
-  <section id="online" hidden>
-    <h2>Online <span id="status"></span></h2>
-    <p><label>Your name <input id="player" maxlength="15" placeholder="Player" autocomplete="off"></label></p>
-    <p><input id="roomname" maxlength="30" placeholder="Game name" autocomplete="off"> <button id="host">Host a game</button></p>
-    <div id="rooms" role="list">…</div>
-  </section>
-  <progress id="bar" max="1" value="0" hidden></progress>
-  <span id="bar-text" style="font-size:12px;color:var(--dim)"></span>
-  <div id="log" role="log" aria-live="polite"></div>
-  <footer>
-    <span><span id="version"></span> <span id="storage-info" style="margin-left:8px"></span></span>
-    <a href="#" id="help-link">Keyboard shortcuts</a>
-  </footer>
-</div>
-<div id="loading" hidden>
   <div id="load-text">Loading the game…</div>
   <progress id="load-bar" max="1" value="0"></progress>
+  <div id="load-sub"></div>
+  <button id="retry-btn" hidden>Retry</button>
 </div>
 <div id="game-ui" hidden>
+  <button id="online-btn" title="Online rooms">Online</button>
   <button id="fullscreen-btn" title="Fullscreen (F11)">⛶</button>
 </div>
 <div id="help-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
@@ -106,7 +105,7 @@
     <h3 id="help-title">Keyboard shortcuts</h3>
     <dl>
       <dt>F11</dt><dd>Toggle fullscreen</dd>
-      <dt>Esc</dt><dd>Exit fullscreen</dd>
+      <dt>Esc</dt><dd>Exit fullscreen / close overlay</dd>
     </dl>
     <p style="margin:12px 0 0;font-size:12px;color:var(--dim)">All standard Age of Empires II hotkeys work in-game.</p>
     <button id="help-close" style="margin-top:12px">Close</button>

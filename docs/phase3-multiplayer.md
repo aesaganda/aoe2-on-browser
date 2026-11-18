@@ -88,6 +88,25 @@ playing.
 
 Not checked yet: players on other machines across the tailnet.
 
+### Mitigations (2026-11-18)
+
+- **Wake Lock**: the page requests a `screen` wake lock while the game runs, so the
+  browser does not dim the screen and the OS does not sleep. Released on return to
+  the lobby.
+- **Tab visibility warning**: a red banner ("The game is paused — keep this tab
+  visible to avoid stalling multiplayer") appears when the tab goes to the
+  background. It hides when the tab regains focus or when the user returns to the
+  lobby.
+- **WebSocket reconnect**: `net_web.c` now retries the relay connection up to 5
+  times with exponential backoff (1 s → 16 s), preserving pending messages. The
+  game thread sees `net_closed()` only after all retries fail.
+- **Relay ping/pong**: `websockets.serve` now sends pings every 20 s with a 10 s
+  timeout, so stale connections are detected and cleaned up.
+- **Relay stats**: `GET /relay/stats` returns room details (player count,
+  connection count, age, idle time) for monitoring.
+- **Game timer**: a subtle elapsed-time counter in the top-right corner during
+  gameplay.
+
 **Tailnet HTTP verification (2026-11-18):** All HTTP endpoints verified working
 through `https://ccenter.adal-shark.ts.net/` via curl: index.html 200 with correct
 COOP/COEP headers, `page.js` 200, `/api/me` returns `{"owner": true, "install": true}`
@@ -95,49 +114,26 @@ for the owner's Tailscale login, `/relay/rooms` returns the room list. The in-ap
 browser blocks `.ts.net` scripts (`ERR_BLOCKED_BY_CLIENT`), so the full page has not
 been tested there; a real Chrome on the tailnet should work.
 
-## Friends' own installs
+## Auto-load on entry (play-cs.com style)
 
-Every player copies their own install into their browser with "Choose your install
-folder…" (Chrome or Edge). Over the tailnet the page sends the isolation headers
-(COOP/COEP) through `tailscale serve`, so the build runs there.
+Every visitor who opens the page boots straight into the game without manual ISO or folder picking:
 
-- **The executable must be the one the code was lifted from**: The Conquerors 1.0,
-  unpatched. `make web` writes its size and SHA-256 to `build/web/aoe2.json`. The page
-  refuses any other `age2_x1.exe` before copying anything, and again before playing.
-  A patched 1.0c exe would otherwise crash, because the lifted code would not match
-  the executable's data.
-- **Videos** play only from the MPEG-1 copies made by `tools/transcode_videos.sh`. A
-  plain Windows install has none, so it plays no videos, and the game carries on
-  without them.
+- On first visit, `web/page.js` fetches `install/manifest.json` and streams the game's files concurrently into OPFS, displaying download progress (`#loading`), then immediately starts `aoe2.js` / `aoe2.wasm`.
+- On subsequent visits, OPFS already has the files, so the page boots straight into the game immediately.
+- Invite links (`?join=<id>&room=<name>`) or `?host=1&room=<name>` boot straight into the multiplayer lobby setup screen.
+- While in-game, clicking **Online** in the top-right HUD opens the multiplayer room list (`Host a game`, `Join`, `Link`, player name).
+- **The executable must match what the build was lifted from**: The Conquerors 1.0, unpatched (`build/web/aoe2.json`).
+- **Videos** play from MPEG-1 copies made by `tools/transcode_videos.sh`.
 
-## Owner auto-load
-
-With `--owner <tailscale-login>`, the page auto-loads the game on the owner's first
-visit through the tailnet. The server checks the `Tailscale-User-Login` header that
-`tailscale serve` adds: if it matches the configured owner, `/install/` is allowed
-and `/api/me` returns `{"owner": true, "install": true}`. The page's `init()`
-fetches `/api/me`, auto-imports from the server without any button press, and skips
-straight to the game list. On return visits the copy is already in the browser, so
-the page shows the game list at once.
-
-For other players, `/install/` returns 404 and `/api/me` returns `owner: false`.
-They use "Choose your install folder…" to copy their own install once, and then also
-skip straight to the game list on every later visit.
-
-```
-sudo tools/deploy/install-services.sh <install-root> <owner-tailscale-login>
+```bash
+sudo tools/deploy/install-services.sh <install-root>
 ```
 
 ## The page server and the tailnet
 
-`tools/web/serve.py --install` serves the owner's install tree. With `--owner` it is
-also available through the tailnet to the owner's Tailscale identity. Without
-`--owner` (or for anyone else), it is served only to direct loopback requests.
+`tools/web/serve.py --install` serves the install tree (or auto-detects `/root/aoe2-recomp-work/install`, `~/aoe2-recomp-work/install`, or `~/aoe2-install`) to all visitors so the platform loads automatically like play-cs.com. `--owner` is still accepted on the CLI for backwards compatibility.
 
-Paths are now normalised and confined to their root. Before, a raw `../` in a
-request could read any file the server could. Over the tailnet, `/install/…` now
-answers 404. The page, `aoe2.js`, `aoe2.wasm` and `/relay` still work. Other players
-copy their own installs with "Choose your install folder…".
+Paths are normalised and confined to their root (`inside()`). Over the tailnet, the page, `/install/...`, `aoe2.js`, `aoe2.wasm`, and `/relay` all work out of the box.
 
 ## Bugs found on the way
 

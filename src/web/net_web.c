@@ -23,18 +23,37 @@ int net_open(void) {
     MAIN_THREAD_EM_ASM({
         if (Module.relay) return;
         const url = Module.relayUrl || ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/relay');
-        const ws = new WebSocket(url);
-        ws.binaryType = 'arraybuffer';
-        const r = (Module.relay = ({ ws: ws, pending: [] }));
-        ws.onopen = () => { console.log('[net] connected to ' + url); for (const f of r.pending) ws.send(f); r.pending = []; };
-        ws.onmessage = (e) => {
-            const a = new Uint8Array(e.data);
-            const p = _malloc(a.length || 1);
-            HEAPU8.set(a, p);
-            _net_web_inbound(p, a.length);
-            _free(p);
-        };
-        ws.onclose = () => { console.warn('[net] the relay closed the connection'); _net_web_closed(); };
+        function connect() {
+            const ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';
+            const r = (Module.relay = ({ ws: ws, pending: Module.relay ? Module.relay.pending : [], retries: Module.relay ? Module.relay.retries : 0 }));
+            ws.onopen = () => {
+                console.log('[net] connected to ' + url);
+                r.retries = 0;
+                for (const f of r.pending) ws.send(f);
+                r.pending = [];
+            };
+            ws.onmessage = (e) => {
+                const a = new Uint8Array(e.data);
+                const p = _malloc(a.length || 1);
+                HEAPU8.set(a, p);
+                _net_web_inbound(p, a.length);
+                _free(p);
+            };
+            ws.onclose = () => {
+                if (r.retries < 5) {
+                    const delay = Math.min(1000 * Math.pow(2, r.retries), 16000);
+                    r.retries++;
+                    console.warn('[net] relay disconnected, reconnecting in ' + delay + 'ms (attempt ' + r.retries + ')');
+                    setTimeout(connect, delay);
+                } else {
+                    console.error('[net] relay connection lost after 5 retries');
+                    Module.relay = null;
+                    _net_web_closed();
+                }
+            };
+        }
+        connect();
     });
     return 0;
 }
