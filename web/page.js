@@ -358,6 +358,7 @@ function presenter(module) {
 
 // --- Audio context resume (browsers block autoplay) ---
 function resumeAudioContexts() {
+  if (muted) return;
   if (typeof SDL === 'object' && SDL.audioContext && SDL.audioContext.state === 'suspended') {
     SDL.audioContext.resume();
   }
@@ -382,6 +383,21 @@ if (OrigAudioContext) {
   };
   window.AudioContext.prototype = OrigCtor.prototype;
   if (window.webkitAudioContext) window.webkitAudioContext = window.AudioContext;
+}
+
+// --- Mute ---
+let muted = false;
+function toggleMute() {
+  muted = !muted;
+  const all = [];
+  if (Array.isArray(window._audioContexts)) all.push(...window._audioContexts);
+  if (typeof SDL === 'object' && SDL.audioContext && !all.includes(SDL.audioContext)) all.push(SDL.audioContext);
+  for (const ctx of all) {
+    if (muted) ctx.suspend().catch(() => {});
+    else ctx.resume().catch(() => {});
+  }
+  $('mute-btn').textContent = muted ? '🔇' : '🔊';
+  $('mute-btn').title = muted ? 'Unmute (M)' : 'Mute (M)';
 }
 
 // --- Fullscreen ---
@@ -513,6 +529,28 @@ window.addEventListener('offline', () => {
 let gameRunning = false;
 let hostedRoom = null;
 let knownPlayers = new Set();
+let pingInterval = null;
+
+async function measurePing() {
+  try {
+    const t0 = performance.now();
+    const r = await fetch(roomsUrl, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+    if (!r.ok) return;
+    await r.text();
+    const ms = Math.round(performance.now() - t0);
+    $('ping').textContent = ms + ' ms';
+  } catch { $('ping').textContent = ''; }
+}
+
+function startPingPolling() {
+  if (pingInterval) return;
+  measurePing();
+  pingInterval = setInterval(measurePing, 10000);
+}
+function stopPingPolling() {
+  if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+  $('ping').textContent = '';
+}
 
 function notifyJoin(name) {
   if (Notification.permission !== 'granted') return;
@@ -537,6 +575,7 @@ function closeOnline() {
 function returnToLobby(msg) {
   gameRunning = false;
   hostedRoom = null;
+  stopPingPolling();
   $('loading').hidden = true;
   $('game-ui').hidden = true;
   $('canvas').hidden = true;
@@ -571,6 +610,7 @@ async function play(launch) {
   await videoStandIns(await root()).catch(() => {});
   gameRunning = true;
   stopRoomPolling();
+  if (launch && launch.lobby) startPingPolling();
   $('setup').hidden = true;
   $('loading').hidden = false;
   const loadBar = $('load-bar');
@@ -725,6 +765,7 @@ $('host').onclick = () => {
 $('retry-btn').onclick = () => location.reload();
 $('saves-btn').onclick = showSaves;
 $('import-rec').onclick = importRecording;
+$('mute-btn').onclick = toggleMute;
 $('fullscreen-btn').onclick = toggleFullscreen;
 $('canvas').addEventListener('contextmenu', (e) => e.preventDefault());
 $('setup').onclick = (e) => { if (gameRunning && e.target === $('setup')) closeOnline(); };
@@ -745,6 +786,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('help-overlay').hidden) { $('help-overlay').hidden = true; return; }
   if (e.key === 'Escape' && gameRunning && !$('setup').hidden) { closeOnline(); return; }
   if (e.key === 'F11' && $('setup').hidden) { e.preventDefault(); toggleFullscreen(); }
+  if ((e.key === 'm' || e.key === 'M') && $('setup').hidden && !e.ctrlKey && !e.altKey && !e.metaKey) toggleMute();
 });
 try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
 $('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
