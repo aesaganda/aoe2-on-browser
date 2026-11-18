@@ -380,5 +380,8 @@ document.addEventListener('keydown', (e) => {
 });
 try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
 $('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
+try { $('roomname').value = localStorage.getItem('aoe2.room') || ''; } catch {}
+$('roomname').oninput = () => { try { localStorage.setItem('aoe2.room', $('roomname').value); } catch {} };
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 navigator.storage.persist?.();
 init();
