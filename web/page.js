@@ -286,10 +286,12 @@ async function listRooms() {
     rooms = (await r.json()).rooms;
     const ping = Math.round(performance.now() - t0);
     consecutiveFails = 0;
+    pollBackoff = POLL_MIN;
     const total = rooms.reduce((s, r) => s + r.players.length, 0);
     setStatus(true, total ? `${total} online · ${ping}ms` : `connected · ${ping}ms`);
   } catch {
     consecutiveFails++;
+    pollBackoff = Math.min(pollBackoff * 1.5, POLL_MAX);
     if (consecutiveFails >= 2) setStatus(false, 'offline');
     $('rooms').textContent = 'Cannot reach the game server.';
     return;
@@ -327,19 +329,39 @@ async function listRooms() {
 }
 
 let roomInterval = null;
+let pollBackoff = 3000;
+const POLL_MIN = 3000, POLL_MAX = 30000;
+
 function startRoomPolling() {
   if (roomInterval) return;
+  pollBackoff = POLL_MIN;
   listRooms();
-  roomInterval = setInterval(listRooms, 3000);
+  scheduleNextPoll();
+}
+
+function scheduleNextPoll() {
+  if (roomInterval) clearTimeout(roomInterval);
+  roomInterval = setTimeout(() => {
+    listRooms().then(() => {
+      if (roomInterval) scheduleNextPoll();
+    });
+  }, pollBackoff);
 }
 
 function stopRoomPolling() {
-  if (roomInterval) { clearInterval(roomInterval); roomInterval = null; }
+  if (roomInterval) { clearTimeout(roomInterval); roomInterval = null; }
 }
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { stopRoomPolling(); }
   else if (!$('setup').hidden) { startRoomPolling(); }
+});
+
+window.addEventListener('online', () => {
+  if (!$('setup').hidden) { pollBackoff = POLL_MIN; startRoomPolling(); }
+});
+window.addEventListener('offline', () => {
+  setStatus(false, 'no network');
 });
 
 function returnToLobby(msg) {

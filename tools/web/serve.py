@@ -19,7 +19,6 @@ Every response is cross-origin isolated (COOP/COEP), which the build's pthreads
 """
 import argparse
 import gzip
-import hashlib
 import http.server
 import json
 import logging
@@ -29,6 +28,7 @@ import socketserver
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 
 log = logging.getLogger("serve")
@@ -83,8 +83,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                       ".wasm": "application/wasm", ".js": "text/javascript", ".mjs": "text/javascript"}
     timeout = 120
 
-    def log_message(self, fmt, *args):
-        log.info("%s %s", self.address_string(), fmt % args)
+    def log_request(self, code="-", size="-"):
+        elapsed = ""
+        t0 = getattr(self, '_req_start', None)
+        if t0 is not None:
+            ms = (time.monotonic() - t0) * 1000
+            elapsed = f" {ms:.0f}ms" if ms < 1000 else f" {ms / 1000:.1f}s"
+        log.info('%s "%s %s" %s%s', self.address_string(),
+                 self.command, self.path, code, elapsed)
 
     def log_error(self, fmt, *args):
         log.warning("%s %s", self.address_string(), fmt % args)
@@ -94,8 +100,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if self.headers.get("Tailscale-User-Login"):
+            self.send_header("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; "
                          "script-src 'self' 'wasm-unsafe-eval'; "
@@ -199,6 +208,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        self._req_start = time.monotonic()
         with self._count_lock:
             Handler.request_count += 1
         path = urllib.parse.urlsplit(self.path).path
@@ -247,6 +257,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_HEAD(self):
+        self._req_start = time.monotonic()
         if urllib.parse.urlsplit(self.path).path == "/install/manifest.json":
             self.send_response(200 if self.install_allowed() else 404)
             self.end_headers()
