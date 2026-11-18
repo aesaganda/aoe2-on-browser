@@ -42,12 +42,29 @@ Description=$2
 After=network.target
 
 [Service]
+Type=simple
 User=$OWNER
 WorkingDirectory=$REPO
 ExecStart=$3
 Restart=always
 RestartSec=2
+StartLimitIntervalSec=300
+StartLimitBurst=10
 Environment=PYTHONUNBUFFERED=1
+
+# Sandboxing
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=$REPO/build
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=$1
 
 [Install]
 WantedBy=multi-user.target
@@ -61,3 +78,15 @@ systemctl daemon-reload
 for u in "${UNITS[@]}"; do systemctl enable "$u.service" >/dev/null 2>&1; systemctl restart "$u.service"; done
 sleep 2
 systemctl --no-pager --lines=0 status "${UNITS[@]/%/.service}" | grep -E '^●|Active:'
+
+# Health check
+echo
+for port in 8642 8643; do
+  url="http://127.0.0.1:$port/health"
+  status=$(curl -s -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || echo "000")
+  if [[ "$status" == "200" ]]; then
+    echo "health: :$port OK"
+  else
+    echo "health: :$port FAIL (HTTP $status)" >&2
+  fi
+done

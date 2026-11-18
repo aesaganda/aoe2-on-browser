@@ -12,9 +12,25 @@
 // (videoStandIns). An install without the copies plays no videos.
 'use strict';
 const $ = (id) => document.getElementById(id);
-const log = (s) => { $('log').textContent += s + '\n'; $('log').scrollTop = 1e9; };
+const log = (s) => { const el = $('log'); el.textContent += s + '\n'; el.scrollTop = 1e9; };
 const DISC_LABEL = 'AGE2_X1';
 const MARK = '.complete';
+
+// --- Compatibility checks ---
+function checkCompat() {
+  const issues = [];
+  if (!window.crossOriginIsolated) issues.push('Cross-origin isolation is not active (SharedArrayBuffer unavailable).');
+  if (!('storage' in navigator && 'getDirectory' in navigator.storage)) issues.push('Origin Private File System (OPFS) is not supported.');
+  if (typeof WebAssembly === 'undefined') issues.push('WebAssembly is not supported.');
+  if (!window.SharedArrayBuffer) issues.push('SharedArrayBuffer is not available.');
+  if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) issues.push('This game needs a desktop browser with keyboard and mouse.');
+  if (issues.length) {
+    const el = $('compat-warn');
+    el.textContent = issues.join(' ');
+    el.hidden = false;
+  }
+  return issues.length === 0;
+}
 
 function skip(path) {
   const p = path.toLowerCase();
@@ -30,14 +46,14 @@ async function dirOf(base, path, create) {
   return [d, parts[parts.length - 1]];
 }
 
-async function writeFile(base, path, data) {           // data: a Blob, a File or a ReadableStream
+async function writeFile(base, path, data) {
   const [d, name] = await dirOf(base, path, true);
   const f = await d.getFileHandle(name, { create: true });
   const w = await f.createWritable();
   if (data instanceof ReadableStream) await data.pipeTo(w); else { await w.write(data); await w.close(); }
 }
 
-async function videoStandIns(base) {                   // an empty x.avi for each x.mpg, in any folder
+async function videoStandIns(base) {
   for await (const [, d] of base.entries()) {
     if (d.kind !== 'directory') continue;
     const names = [];
@@ -60,7 +76,6 @@ async function isComplete() {
   try { await (await root()).getFileHandle(MARK); return true; } catch { return false; }
 }
 
-// From a folder the owner picks: the File System Access API where there is one
 async function* walk(dir, prefix = '') {
   for await (const [name, h] of dir.entries()) {
     const path = prefix + name;
@@ -69,9 +84,6 @@ async function* walk(dir, prefix = '') {
   }
 }
 
-// The code on this page was lifted from one exact age2_x1.exe (build/web/aoe2.json,
-// written by make web): the same game, version 1.0. Another version's executable (a
-// patch such as 1.0c) does not match it and would crash, so it is refused up front.
 const EXE_PATH = 'age2_x1/age2_x1.exe';
 async function exeProblem(file) {
   let want;
@@ -85,7 +97,8 @@ async function exeProblem(file) {
   return `Your age2_x1.exe (${file.size} bytes) is not the one this build runs: it needs The Conquerors 1.0 as ` +
          `installed from the disc, without patches (${want.size} bytes, SHA-256 ${want.sha256.slice(0, 12)}…).`;
 }
-async function copiedExe() {                            // the copy's age2_x1.exe, whatever its case
+
+async function copiedExe() {
   for await (const [n, d] of (await root()).entries())
     if (d.kind === 'directory' && n.toLowerCase() === 'age2_x1')
       for await (const [m, f] of d.entries()) if (f.kind === 'file' && m.toLowerCase() === 'age2_x1.exe') return f.getFile();
@@ -113,11 +126,11 @@ async function importFolder() {
     await writeFile(base, p, f);
     done += f.size; $('bar').value = done / total;
   }
+  $('bar').hidden = true;
   await finish(base);
-  log(`copied ${sized.length} files (${(total / 1e6).toFixed(0)} MB)`);
+  log(`Copied ${sized.length} files (${(total / 1e6).toFixed(0)} MB). Ready to play.`);
 }
 
-// From the dev server (tools/web/serve.py --install): its manifest, then each file
 async function importServer() {
   const list = await (await fetch('install/manifest.json')).json();
   const base = await root();
@@ -131,13 +144,14 @@ async function importServer() {
     await writeFile(base, p, r.body);
     done += n; $('bar').value = done / total;
   }
+  $('bar').hidden = true;
   await finish(base);
-  log(`copied ${files.length} files (${(total / 1e6).toFixed(0)} MB) from the server`);
+  log(`Copied ${files.length} files (${(total / 1e6).toFixed(0)} MB) from the server. Ready to play.`);
 }
 
 async function forget() {
   await (await navigator.storage.getDirectory()).removeEntry('aoe2', { recursive: true });
-  log('removed'); await refresh();
+  log('Game files removed.'); await refresh();
 }
 
 async function refresh() {
@@ -157,9 +171,6 @@ async function refresh() {
   }
 }
 
-// win32hle's screen.c hands each frame to the page (its __EMSCRIPTEN__ path): an
-// RGB565 picture of w x h in wasm memory, to be shown at (dx, dy, dw, dh) of SDL's
-// cw x ch window. It is drawn on #screen, laid over that rectangle of SDL's canvas.
 function presenter(module) {
   const sdl = $('canvas'), scr = $('screen'), ctx = scr.getContext('2d');
   let img = null;
@@ -177,32 +188,51 @@ function presenter(module) {
       scr.hidden = false;
       $('loading').hidden = true;
     },
-    ra2Menu(open) { scr.hidden = !!open; },          // SDL draws the host's own menu (F10) itself
+    ra2Menu(open) { scr.hidden = !!open; },
   };
 }
 
-// The multiplayer relay (tools/net/relay.py): beside the page behind a proxy (/relay),
-// or its own port when the page comes straight from tools/web/serve.py
 const RELAY = location.port === '8642' ? `//${location.hostname}:8643/relay` : `//${location.host}/relay`;
 const relayUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + RELAY;
 const roomsUrl = location.protocol + RELAY + '/rooms';
 
-// Online: the games on the relay, refreshed while this page shows. Joining or hosting
-// starts the game through DirectPlay lobby launch (its LOBBY switch,
-// src/net/dplay_net.c): straight into that game's setup screen.
+// --- Connection status ---
+let relayOk = false;
+let consecutiveFails = 0;
+
+function setStatus(ok, text) {
+  const el = $('status');
+  el.textContent = text;
+  el.className = ok ? 'ok' : 'err';
+  relayOk = ok;
+}
+
 const playerName = () => ($('player').value.trim() || 'Player').slice(0, 15);
+
 async function listRooms() {
   if ($('setup').hidden) return;
   let rooms = [];
-  try { rooms = (await (await fetch(roomsUrl, { cache: 'no-store' })).json()).rooms; } catch { $('rooms').textContent = 'The game server cannot be reached.'; return; }
+  try {
+    const r = await fetch(roomsUrl, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+    if (!r.ok) throw new Error(r.status);
+    rooms = (await r.json()).rooms;
+    consecutiveFails = 0;
+    setStatus(true, 'connected');
+  } catch {
+    consecutiveFails++;
+    if (consecutiveFails >= 2) setStatus(false, 'offline');
+    $('rooms').textContent = 'Cannot reach the game server.';
+    return;
+  }
   const box = $('rooms'), key = JSON.stringify(rooms) + $('play').hidden;
-  if (box.dataset.key === key) return;                  // unchanged: keep the buttons under the mouse
+  if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.replaceChildren();
-  if (!rooms.length) { box.textContent = 'No games yet: host one.'; return; }
+  if (!rooms.length) { box.textContent = 'No games yet — host one.'; return; }
   for (const r of rooms) {
     const row = document.createElement('div');
     row.className = 'room';
+    row.setAttribute('role', 'listitem');
     const info = document.createElement('span');
     info.textContent = `${r.name} — ${r.players.length}/${r.max} (${r.players.join(', ')})${r.open ? '' : ' · playing'}`;
     const b = document.createElement('button');
@@ -213,15 +243,26 @@ async function listRooms() {
     box.append(row);
   }
 }
-setInterval(listRooms, 3000);
+
+let roomInterval = null;
+function startRoomPolling() {
+  if (roomInterval) return;
+  listRooms();
+  roomInterval = setInterval(listRooms, 3000);
+}
+
+function stopRoomPolling() {
+  if (roomInterval) { clearInterval(roomInterval); roomInterval = null; }
+}
 
 async function play(launch) {
   if (!crossOriginIsolated) { log('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
-  if (!$('eula').checked) { log('The game runs only once its license agreement is accepted (the checkbox above).'); return; }
+  if (!$('eula').checked) { log('Accept the license agreement first (the checkbox above).'); return; }
   const exe = await copiedExe().catch(() => null);
   const problem = exe ? await exeProblem(exe) : 'The copy in this browser has no age2_x1\\age2_x1.exe.';
   if (problem) { log(problem + ' Remove the copy and copy a matching install.'); return; }
-  await videoStandIns(await root()).catch(() => {});    // copies made before the stand-ins existed
+  await videoStandIns(await root()).catch(() => {});
+  stopRoomPolling();
   $('setup').hidden = true;
   $('loading').hidden = false;
   const canvas = $('canvas');
@@ -232,8 +273,8 @@ async function play(launch) {
     canvas,
     arguments: [],
     preRun: [(m) => {
-      m.ENV.AOE2_ACCEPT_EULA = '1';                     // the owner's answer (src/linux/aoc_shims.c)
-      if (launch && launch.lobby) {                     // a game from the list, or a new one
+      m.ENV.AOE2_ACCEPT_EULA = '1';
+      if (launch && launch.lobby) {
         m.ENV.AOE2_ARGS = 'LOBBY';
         m.ENV.AOE2_LOBBY = launch.lobby;
         m.ENV.AOE2_ROOM = launch.room || '';
@@ -244,21 +285,34 @@ async function play(launch) {
     print: (t) => console.log(t),
     printErr: (t) => console.warn(t),
   };
-  Object.assign(config, presenter(config));             // the module object is this config
-  s.onload = () => AoE2(config).catch((e) => { $('loading').hidden = true; $('setup').hidden = false; log('the game stopped: ' + e); });
+  Object.assign(config, presenter(config));
+  s.onload = () => AoE2(config).catch((e) => {
+    $('loading').hidden = true;
+    $('setup').hidden = false;
+    startRoomPolling();
+    log('The game stopped: ' + e);
+  });
+  s.onerror = () => {
+    $('loading').hidden = true;
+    $('setup').hidden = false;
+    startRoomPolling();
+    log('Failed to load the game engine. Try refreshing the page.');
+  };
   document.body.appendChild(s);
 }
 
 const guard = (f) => async () => {
   for (const b of document.querySelectorAll('button')) b.disabled = true;
-  try { await f(); } catch (e) { log('error: ' + e.message); console.error(e); }
+  try { await f(); } catch (e) { log('Error: ' + e.message); console.error(e); }
   for (const b of document.querySelectorAll('button')) b.disabled = false;
   await refresh();
 };
 
 async function init() {
+  checkCompat();
+
   const complete = await isComplete();
-  if (complete) { await refresh(); return; }
+  if (complete) { await refresh(); startRoomPolling(); return; }
 
   let me = { owner: false, install: false };
   try { me = await (await fetch('api/me', { cache: 'no-store' })).json(); } catch {}
@@ -277,10 +331,12 @@ async function init() {
       $('eula-row').hidden = false;
       await refresh();
     }
+    startRoomPolling();
     return;
   }
 
   await refresh();
+  startRoomPolling();
 }
 
 $('pick').onclick = guard(importFolder);
@@ -290,6 +346,5 @@ $('play').onclick = () => play();
 $('host').onclick = () => play({ lobby: 'host', room: ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30) });
 try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
 $('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
-listRooms();
 navigator.storage.persist?.();
 init();
