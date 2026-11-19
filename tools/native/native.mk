@@ -31,7 +31,7 @@ $(PC)/win32hle/%.c $(PC)/win32hle/%.h $(PC)/recomp32/%.h: $(PC_STAMP) ;
 # few symbols the lifted code expects from them come from src/linux/runtime_glue.c.
 RT_SRC  :=
 APP_SRC := src/linux/main.c src/linux/runtime_glue.c src/linux/aoc_shims.c src/linux/win32_gaps.c src/linux/dplay_stub.c src/linux/cdrom.c \
-           src/linux/aoc_inflate.c src/linux/ddraw_debug.c src/linux/edit_overlay.c src/linux/mciwnd.c \
+           src/linux/aoc_inflate.c src/linux/ddraw_debug.c src/linux/edit_overlay.c src/linux/mciwnd.c src/linux/widescreen.c \
            src/net/dplay_net.c src/net/net_queue.c src/net/net_native.c
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 SDL2_ttf)
@@ -40,7 +40,7 @@ SDL_LIBS   := $(shell pkg-config --libs sdl2 SDL2_ttf)
 # The lift is 50 MB of C: -O1 keeps the build to minutes; hot paths get -O2 later.
 GEN_OPT  ?= -O1
 CFLAGS_COMMON := -g -fno-strict-aliasing $(TRACE_DEFS) -I$(PC)/recomp32 -I$(PC)/win32hle -I$(GEN) -Ithird_party/pl_mpeg
-CFLAGS_GEN := $(GEN_OPT) -w -DRECOMP_LOCAL_REGS $(CFLAGS_COMMON)
+CFLAGS_GEN := $(GEN_OPT) -w -DRECOMP_LOCAL_REGS -include src/linux/widescreen_hooks.h $(CFLAGS_COMMON)
 CFLAGS_RT  := -O1 -w $(CFLAGS_COMMON) $(SDL_CFLAGS)
 
 GEN_OBJ := $(patsubst $(GEN)/%.c,$(OBJ)/gen/%.o,$(GEN_SRC))
@@ -54,6 +54,8 @@ $(BIN): $(GEN_OBJ) $(HLE_OBJ) $(RT_OBJ) $(APP_OBJ)
 $(OBJ)/gen/%.o: $(GEN)/%.c | $(PC_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_GEN) -c $< -o $@
+
+$(OBJ)/gen/recomp_0002.o $(OBJ)/gen/recomp_0004.o $(OBJ)/gen/recomp_0010.o: src/linux/widescreen_hooks.h $(PC_STAMP)
 
 $(OBJ)/hle/%.o: $(PC)/win32hle/%.c $(PC_STAMP)
 	@mkdir -p $(dir $@)

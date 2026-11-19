@@ -27,6 +27,8 @@ void edit_overlay_install(void);   /* edit_overlay.c */
 void mciwnd_register(void);        /* mciwnd.c: the AVI cinematics */
 void dplay_net_install(void);      /* src/net/dplay_net.c: multiplayer over the relay */
 void ddraw_debug_register(void);   /* ddraw_debug.c: AOE2_TRACE_BLT / AOE2_DUMP_SURFACES */
+void widescreen_init(void);        /* widescreen.c: AOE2_RESOLUTION=WxH custom mode */
+int  widescreen_base_width(void);
 
 #define HKCU 0x80000001u
 #define HKLM 0x80000002u
@@ -41,8 +43,9 @@ static void seed_registry(int disc, int first_reg) {
     hle_reg_set_string(HKLM, AOK_KEY, "EXE Path", "C:\\");
     hle_reg_set_string(HKLM, AOK_KEY, "CDPath", "C:\\");
 
+    int base = widescreen_base_width();
     const char *res_env = getenv("AOE2_RESOLUTION");
-    int res = res_env ? atoi(res_env) : 0;
+    int res = base > 0 ? base : (res_env ? atoi(res_env) : 0);
     if (res == 800 || res == 1024 || res == 1280) {
         hle_reg_set_dword(HKCU, AOC_KEY, "Screen Size", (uint32_t)res);
     } else if (first_reg) {
@@ -100,6 +103,7 @@ int main(int argc, char **argv) {
     snprintf(reg_path, sizeof reg_path, "%s/registry.ini", root);
     int first_reg = (access(reg_path, F_OK) != 0);
     hle_reg_load(reg_path);
+    widescreen_init();
     seed_registry(have_disc, first_reg);
     /* The SDL window DirectDraw presents into (pcrecomp screen.c). AOE2_HEADLESS=1: none. */
     const char *hl = getenv("AOE2_HEADLESS");
@@ -117,8 +121,9 @@ int main(int argc, char **argv) {
      * previously saved 800x600 player.nfz value. */
     static char cmdline[1024];
     const char *args = getenv("AOE2_ARGS");
+    int base_w = widescreen_base_width();
     const char *res_env = getenv("AOE2_RESOLUTION");
-    int res = res_env ? atoi(res_env) : 0;
+    int res = base_w > 0 ? base_w : (res_env ? atoi(res_env) : 0);
     const char *res_arg = "";
     if ((res == 800 || res == 1024 || res == 1280) &&
         (!args || (!strstr(args, "800") && !strstr(args, "1024") && !strstr(args, "1280")))) {

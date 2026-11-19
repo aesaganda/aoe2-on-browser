@@ -636,12 +636,12 @@ function initWebGL(canvas) {
   };
 }
 
-const VALID_RES = ['800', '1024', '1280'];
+const VALID_RES = ['800', '1024', '1280', '1280x720', '1366x768', '1600x900', '1920x1080'];
 let selectedRes = (() => {
   try {
     const v = localStorage.getItem('aoe2.res');
-    return VALID_RES.includes(v) ? v : '1024';
-  } catch { return '1024'; }
+    return VALID_RES.includes(v) ? v : '1366x768';
+  } catch { return '1366x768'; }
 })();
 let launchedRes = selectedRes;
 if ($('res-select')) $('res-select').value = selectedRes;
@@ -687,9 +687,10 @@ function syncScreenRect() {
   let r = sdl.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) {
     const topOff = getHudHeight();
+    const ar = (currentFrameW > 0 && currentFrameH > 0) ? (currentFrameW / currentFrameH) : (4 / 3);
     const vw = window.innerWidth, vh = Math.max(100, window.innerHeight - topOff);
-    const w = Math.min(vw, (vh * 4) / 3);
-    const h = Math.min(vh, (vw * 3) / 4);
+    const w = Math.min(vw, vh * ar);
+    const h = Math.min(vh, vw / ar);
     r = { left: (vw - w) / 2, top: topOff + (vh - h) / 2, width: w, height: h };
   }
   const sx = r.width / cw, sy = r.height / ch;
@@ -751,10 +752,16 @@ function presenter(module) {
         lastFrameH = h;
         currentFrameW = w;
         currentFrameH = h;
+        document.documentElement.style.setProperty('--game-ar', String(w / h));
+        sdl.style.width = '';
+        sdl.style.height = '';
         if ($('res-badge')) $('res-badge').textContent = `${w}×${h}`;
-        // AoE2 always uses 800x600 on menus and 640x480 on videos; only sync high-res match modes.
-        if (w === 1024 || w === 1280) {
-          launchedRes = String(w);
+        // AoE2 always uses 800x600 on menus and 640x480 on videos; only sync high-res / widescreen match modes.
+        const modeKey = (w === 1024 && h === 768) ? '1024'
+                      : (w === 1280 && h === 1024) ? '1280'
+                      : VALID_RES.includes(`${w}x${h}`) ? `${w}x${h}` : '';
+        if (modeKey) {
+          launchedRes = modeKey;
           selectedRes = launchedRes;
           try { localStorage.setItem('aoe2.res', launchedRes); } catch {}
           if ($('res-select')) $('res-select').value = launchedRes;
@@ -1456,6 +1463,9 @@ function returnToLobby(msg) {
   if ($('crt-scanlines')) $('crt-scanlines').hidden = true;
   if ($('res-badge')) $('res-badge').textContent = '';
   if ($('apply-res')) $('apply-res').hidden = true;
+  currentFrameW = 0;
+  currentFrameH = 0;
+  document.documentElement.style.setProperty('--game-ar', '1.3333333');
   $('fps').textContent = '';
   $('saves-list').hidden = true;
   $('play').textContent = 'Play';
@@ -1832,7 +1842,7 @@ $('host').onclick = () => {
 if ($('res-select')) {
   $('res-select').onchange = () => {
     const val = $('res-select').value;
-    selectedRes = VALID_RES.includes(val) ? val : '1024';
+    selectedRes = VALID_RES.includes(val) ? val : '1366x768';
     try { localStorage.setItem('aoe2.res', selectedRes); } catch {}
     if ($('apply-res')) $('apply-res').hidden = !gameRunning || (selectedRes === launchedRes);
   };

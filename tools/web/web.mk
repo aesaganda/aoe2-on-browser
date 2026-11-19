@@ -29,14 +29,14 @@ HLE_SRC := $(addprefix $(PC)/win32hle/,$(notdir $(filter-out %_selftest.c,$(wild
 $(PC)/win32hle/%.c: $(PC_COPY)/.patched ;
 .SECONDARY:
 APP_SRC := src/linux/main.c src/linux/runtime_glue.c src/linux/aoc_shims.c src/linux/win32_gaps.c src/linux/dplay_stub.c src/linux/cdrom.c \
-           src/linux/aoc_inflate.c src/linux/ddraw_debug.c src/linux/edit_overlay.c src/linux/mciwnd.c src/web/web_fs.c \
+           src/linux/aoc_inflate.c src/linux/ddraw_debug.c src/linux/edit_overlay.c src/linux/mciwnd.c src/linux/widescreen.c src/web/web_fs.c \
            src/net/dplay_net.c src/net/net_queue.c src/web/net_web.c
 
 PORTS   := -sUSE_SDL=2 -sUSE_SDL_TTF=2 -sUSE_ZLIB=1
 COMMON  := -g0 -fno-strict-aliasing -mtail-call -pthread -DRECOMP_FLAT_MEMORY $(PORTS) \
            -I$(PC)/recomp32 -I$(PC)/win32hle -I$(GEN) -Ithird_party/pl_mpeg
 GEN_OPT ?= -O1
-CFLAGS_GEN := $(GEN_OPT) -w -DRECOMP_LOCAL_REGS $(COMMON)
+CFLAGS_GEN := $(GEN_OPT) -w -DRECOMP_LOCAL_REGS -include src/linux/widescreen_hooks.h $(COMMON)
 CFLAGS_RT  := -O2 -w $(COMMON)
 
 # The fonts win32hle's GDI and the edit overlay look for (Liberation, SIL OFL 1.1)
@@ -65,6 +65,8 @@ $(META): $(EXE)
 $(OBJ)/gen/%.o: $(GEN)/%.c | $(PC_COPY)/.patched
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_GEN) -c $< -o $@
+
+$(OBJ)/gen/recomp_0002.o $(OBJ)/gen/recomp_0004.o $(OBJ)/gen/recomp_0010.o: src/linux/widescreen_hooks.h $(PC_COPY)/.patched
 
 $(OBJ)/hle/%.o: $(PC)/win32hle/%.c $(PC_COPY)/.patched
 	@mkdir -p $(dir $@)

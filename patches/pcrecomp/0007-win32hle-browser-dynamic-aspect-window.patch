@@ -1,0 +1,16 @@
+--- a/runtime/win32hle/screen.c
++++ b/runtime/win32hle/screen.c
+@@ -305,6 +305,13 @@
+      * content over it (hle_screen_rgb_hook) is composed in XRGB first. */
+     if (bpp == 16 || bpp == 8) {
+         int ww, wh;
++        if (g_win && w > 0 && h > 0) {
++            static int last_win_w, last_win_h;
++            if (w != last_win_w || h != last_win_h) {
++                SDL_SetWindowSize(g_win, w, h);
++                last_win_w = w, last_win_h = h;
++            }
++        }
+         SDL_GetRendererOutputSize(g_ren, &ww, &wh);
+         if ((long long)ww * h > (long long)wh * w) g_dst.h = wh, g_dst.w = (int)((long long)wh * w / h);
+         else g_dst.w = ww, g_dst.h = (int)((long long)ww * h / w);

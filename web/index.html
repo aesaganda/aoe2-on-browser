@@ -32,6 +32,7 @@
     --ok: #52c468;
     --warn: #e5a93c;
     --hud-h: 36px;
+    --game-ar: 1.3333333;
   }
   body.hud-collapsed, :fullscreen, :-webkit-full-screen { --hud-h: 0px; }
   body.hud-collapsed #game-ui { display: none !important; }
@@ -46,14 +47,14 @@
     font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
-  /* --- Centered 4:3 Game Canvas & WebGL Overlay --- */
+  /* --- Centered Responsive Game Canvas & WebGL Overlay --- */
   #canvas {
     position: fixed;
     left: 50%;
     top: calc(var(--hud-h) + (100vh - var(--hud-h)) / 2);
     transform: translate(-50%, -50%);
-    width: min(100vw, calc((100vh - var(--hud-h)) * 4 / 3));
-    height: min(calc(100vh - var(--hud-h)), calc(100vw * 3 / 4));
+    width: min(100vw, calc((100vh - var(--hud-h)) * var(--game-ar))) !important;
+    height: min(calc(100vh - var(--hud-h)), calc(100vw / var(--game-ar))) !important;
     display: block;
     background: #000;
     outline: none;
@@ -716,9 +717,17 @@
         <div class="field-group">
           <label class="field-label" for="res-select">In-Game Resolution</label>
           <select id="res-select">
-            <option value="800">800×600 (Classic)</option>
-            <option value="1024">1024×768 (Recommended)</option>
-            <option value="1280">1280×1024 (High)</option>
+            <optgroup label="Widescreen (16:9)">
+              <option value="1280x720">1280×720 (HD 16:9)</option>
+              <option value="1366x768">1366×768 (Widescreen · Recommended)</option>
+              <option value="1600x900">1600×900 (HD+ 16:9)</option>
+              <option value="1920x1080">1920×1080 (Full HD 16:9)</option>
+            </optgroup>
+            <optgroup label="Classic (4:3 / 5:4)">
+              <option value="800">800×600 (Classic)</option>
+              <option value="1024">1024×768 (Classic)</option>
+              <option value="1280">1280×1024 (Classic High)</option>
+            </optgroup>
           </select>
         </div>
         <div class="field-group">
