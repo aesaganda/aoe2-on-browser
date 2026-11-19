@@ -327,6 +327,31 @@
     background: rgba(212, 173, 83, 0.18);
     border-color: var(--accent);
   }
+  #game-ui button.active {
+    background: rgba(212, 173, 83, 0.24);
+    border-color: var(--accent);
+    color: var(--accent-bright);
+  }
+  #setup-panel.drop-active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(212, 173, 83, 0.35), 0 24px 60px rgba(0, 0, 0, 0.7);
+  }
+  .save-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    margin-right: 6px;
+    background: rgba(212, 173, 83, 0.14);
+    color: var(--accent-bright);
+    border: 1px solid rgba(212, 173, 83, 0.28);
+  }
+  .save-badge.replay { background: rgba(94, 214, 114, 0.12); color: var(--ok); border-color: rgba(94, 214, 114, 0.28); }
+  .save-badge.mp { background: rgba(114, 168, 240, 0.14); color: #8ec5ff; border-color: rgba(114, 168, 240, 0.3); }
+  .save-badge.scenario { background: rgba(198, 138, 240, 0.14); color: #d9a7ff; border-color: rgba(198, 138, 240, 0.3); }
   #hud-online-dot {
     width: 7px;
     height: 7px;
@@ -667,8 +692,8 @@
       <div id="actions" style="margin-top:0">
         <button id="play" class="primary">Play</button>
         <button id="saves-btn" hidden>Saves</button>
-        <button id="import-rec" hidden title="Import a recorded game or save (.mgx, .mgl, .mgz)">Import .mgx</button>
-        <input type="file" id="rec-input" accept=".mgx,.mgl,.mgz" hidden>
+        <button id="import-rec" hidden title="Import saves, replays, or scenarios (.gax, .gam, .mgx, .mgl, .mgz, .msx, .mgs, .scx, .scn)">Import Save/Replay</button>
+        <input type="file" id="rec-input" multiple accept=".gax,.gam,.mgx,.mgl,.mgz,.msx,.mgs,.scx,.scn" hidden>
         <span id="save-count" style="font-size:12px;color:var(--dim)"></span>
       </div>
     </div>
@@ -769,7 +794,7 @@
     <div id="load-sub"></div>
     <button id="retry-btn" class="primary" hidden style="margin-top:12px">Retry</button>
     <div class="load-tips">
-      <kbd>Esc</kbd> Skip intro / close lobby · <kbd>F11</kbd> Fullscreen · <kbd>F12</kbd> Scaling · <kbd>Alt+M</kbd> Mute
+      <kbd>Esc</kbd> Skip intro / close lobby · <kbd>F11</kbd> Fullscreen · <kbd>F12</kbd> Scaling · <kbd>Alt+M</kbd> Mute · <kbd>Alt+L</kbd> Lock mouse
     </div>
   </div>
 </div>
@@ -783,6 +808,9 @@
     <span id="ping" class="hud-metric"></span>
   </div>
   <div class="hud-group">
+    <button id="hud-invite-btn" hidden title="Copy invite link for your hosted room">📋 Invite</button>
+    <button id="lock-btn" title="Lock mouse for edge scrolling (Alt+L · Esc to release)">🔓 Lock</button>
+    <button id="hud-saves-btn" title="Saved games, replays &amp; scenarios">💾</button>
     <button id="mute-btn" title="Mute / unmute audio (Alt+M)">🔊</button>
     <input id="volume-slider" type="range" min="0" max="100" value="80" title="Master volume" aria-label="Master volume">
     <button id="scale-btn" title="Cycle scaling filter (Smooth / Sharp / CRT)">Smooth</button>
@@ -803,10 +831,11 @@
       <dt>F11 / Alt+Enter</dt><dd>Toggle fullscreen mode</dd>
       <dt>F12</dt><dd>Cycle scaling filter (Smooth / Sharp / CRT)</dd>
       <dt>Alt+M</dt><dd>Mute / unmute game audio</dd>
+      <dt>Alt+L</dt><dd>Lock / unlock mouse for edge scrolling (Esc to release)</dd>
       <dt>H / .</dt><dd>Select Town Center / cycle Idle Villager (in-game)</dd>
       <dt>Enter</dt><dd>In-game multiplayer chat</dd>
     </dl>
-    <p style="margin:14px 0 0;font-size:12px;color:var(--dim)">All standard Age of Empires II: The Conquerors hotkeys and control groups (Ctrl+1–9) work in-game.</p>
+    <p style="margin:14px 0 0;font-size:12px;color:var(--dim)">All standard Age of Empires II: The Conquerors hotkeys and control groups (Ctrl+1–9) work in-game. Drag &amp; drop saves, replays, or scenarios onto the lobby panel to import them.</p>
     <button id="help-close" class="primary" style="margin-top:14px;width:100%">Close</button>
   </div>
 </div>

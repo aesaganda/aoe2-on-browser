@@ -30,6 +30,7 @@ int net_open(void) {
             ws.onopen = () => {
                 console.log('[net] connected to ' + url);
                 r.retries = 0;
+                if (Module.onRelayState) Module.onRelayState('connected', 0, 0);
                 for (const f of r.pending) ws.send(f);
                 r.pending = [];
             };
@@ -45,9 +46,11 @@ int net_open(void) {
                     const delay = Math.min(1000 * Math.pow(2, r.retries), 16000);
                     r.retries++;
                     console.warn('[net] relay disconnected, reconnecting in ' + delay + 'ms (attempt ' + r.retries + ')');
+                    if (Module.onRelayState) Module.onRelayState('reconnecting', r.retries, delay);
                     setTimeout(connect, delay);
                 } else {
                     console.error('[net] relay connection lost after 5 retries');
+                    if (Module.onRelayState) Module.onRelayState('lost', r.retries, 0);
                     Module.relay = null;
                     _net_web_closed();
                 }

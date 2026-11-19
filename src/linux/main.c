@@ -52,6 +52,7 @@ static void seed_registry(int disc, int first_reg) {
 
 #ifdef __EMSCRIPTEN__
 const char *web_game_root(void);   /* src/web/web_fs.c: the install tree, in the browser's OPFS */
+void web_input_install(void);      /* src/web/web_fs.c: Pointer Lock relative mouse bridge */
 #endif
 
 int main(int argc, char **argv) {
@@ -106,6 +107,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[aoe2] no window; continuing headless\n");
     edit_overlay_install();         /* EDIT controls over the picture (chains screen.c's hook) */
     dplay_net_install();            /* DirectPlay's messages, taken at each pump (chains the poll hook) */
+#ifdef __EMSCRIPTEN__
+    web_input_install();            /* Pointer Lock relative mouse bridge on the game thread */
+#endif
     /* The game's own command-line switches (NOSTARTUP, DONTIGNORESYNC, ...): AOE2_ARGS.
      * GetCommandLineA answers the exe's Windows path with them, as the shortcut would.
      * Pass AOE2_RESOLUTION (800/1024/1280) on the command line as well so AoE2's

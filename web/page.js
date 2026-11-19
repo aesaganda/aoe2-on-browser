@@ -390,17 +390,9 @@ async function refresh() {
   $('host').disabled = !ok;
   if (ok) {
     try {
-      let saves = 0;
-      const r = await root();
-      for await (const [n, h] of r.entries()) {
-        if (h.kind !== 'directory' || n.toLowerCase() !== 'savegame') continue;
-        for await (const [sn] of h.entries()) {
-          const l = sn.toLowerCase();
-          if (l.endsWith('.mgl') || l.endsWith('.mgx') || l.endsWith('.mgz')) saves++;
-        }
-      }
-      $('save-count').textContent = saves ? `${saves} saved game${saves > 1 ? 's' : ''}` : '';
-    } catch { /* no SaveGame dir yet */ }
+      const files = await listSaves();
+      $('save-count').textContent = files.length ? `${files.length} saved file${files.length > 1 ? 's' : ''}` : '';
+    } catch { /* no save/scenario dir yet */ }
     try {
       const { usage } = await navigator.storage.estimate();
       const usedMB = (usage / 1e6).toFixed(0);
@@ -421,45 +413,108 @@ function tickFps() {
   }
 }
 
-// --- Save game management ---
-async function getSaveDir() {
-  const r = await root();
-  try { return await r.getDirectoryHandle('SaveGame'); } catch { return null; }
+// --- Save game, replay & scenario management ---
+const SAVE_EXT_INFO = {
+  '.gax': { kind: 'Save', cls: '', folder: 'savegame' },
+  '.gam': { kind: 'Save', cls: '', folder: 'savegame' },
+  '.mgx': { kind: 'Replay', cls: 'replay', folder: 'savegame' },
+  '.mgl': { kind: 'Replay', cls: 'replay', folder: 'savegame' },
+  '.mgz': { kind: 'Replay', cls: 'replay', folder: 'savegame' },
+  '.msx': { kind: 'MP Save', cls: 'mp', folder: 'savegame/multi' },
+  '.mgs': { kind: 'MP Save', cls: 'mp', folder: 'savegame/multi' },
+  '.scx': { kind: 'Scenario', cls: 'scenario', folder: 'scenario' },
+  '.scn': { kind: 'Scenario', cls: 'scenario', folder: 'scenario' },
+};
+
+function saveFileMeta(name) {
+  const idx = name.lastIndexOf('.');
+  return idx >= 0 ? (SAVE_EXT_INFO[name.slice(idx).toLowerCase()] || null) : null;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 KB';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function notifyFsChanged() {
+  try { activeModule?._web_fs_notify_change?.(); } catch {}
+}
+
+async function findDirsCI(parent, lowerName) {
+  const out = [];
+  try {
+    for await (const [n, h] of parent.entries()) {
+      if (h.kind === 'directory' && n.toLowerCase() === lowerName) out.push(h);
+    }
+  } catch {}
+  return out;
+}
+
+async function getTargetDirForExt(folderPath, create) {
+  let cur = await root();
+  for (const seg of folderPath.split('/')) {
+    let next = null;
+    try { next = await cur.getDirectoryHandle(seg); } catch {}
+    if (!next) {
+      const matches = await findDirsCI(cur, seg.toLowerCase());
+      if (matches.length) next = matches[0];
+    }
+    if (!next && create) next = await cur.getDirectoryHandle(seg, { create: true });
+    if (!next) return null;
+    cur = next;
+  }
+  return cur;
+}
+
+async function collectSaveFilesFromDir(dirHandle, files) {
+  for await (const [name, h] of dirHandle.entries()) {
+    if (h.kind !== 'file') continue;
+    const meta = saveFileMeta(name);
+    if (!meta) continue;
+    const f = await h.getFile();
+    files.push({ name, size: f.size, modified: f.lastModified, handle: h, dirHandle, meta });
+  }
 }
 
 async function listSaves() {
-  const dir = await getSaveDir();
-  if (!dir) return [];
+  const r = await root();
   const files = [];
-  for await (const [name, h] of dir.entries()) {
-    if (h.kind !== 'file') continue;
-    const lower = name.toLowerCase();
-    if (lower.endsWith('.mgx') || lower.endsWith('.mgl') || lower.endsWith('.mgz')) {
-      const f = await h.getFile();
-      files.push({ name, size: f.size, modified: f.lastModified, handle: h });
+  for (const dir of await findDirsCI(r, 'savegame')) {
+    await collectSaveFilesFromDir(dir, files);
+    for (const multi of await findDirsCI(dir, 'multi')) {
+      await collectSaveFilesFromDir(multi, files);
     }
+  }
+  for (const dir of await findDirsCI(r, 'scenario')) {
+    await collectSaveFilesFromDir(dir, files);
   }
   files.sort((a, b) => b.modified - a.modified);
   return files;
 }
 
-async function showSaves() {
+async function showSaves(forceOpen = false) {
   const list = $('saves-list');
-  if (!list.hidden) { list.hidden = true; return; }
+  if (!forceOpen && !list.hidden) { list.hidden = true; return; }
   const files = await listSaves();
   list.replaceChildren();
-  if (!files.length) { list.textContent = 'No saved games or recordings yet.'; list.hidden = false; return; }
+  if (!files.length) {
+    list.textContent = 'No saved games, replays, or scenarios yet.';
+    list.hidden = false;
+    return;
+  }
   for (const f of files) {
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #252730;font-size:13px';
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid #252730;font-size:13px';
     const info = document.createElement('span');
     info.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)';
-    const sizeMB = (f.size / 1e6).toFixed(1);
-    const date = new Date(f.modified);
-    const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    info.textContent = `${f.name}  (${sizeMB} MB · ${dateStr})`;
+    const badge = document.createElement('span');
+    badge.className = 'save-badge' + (f.meta.cls ? ' ' + f.meta.cls : '');
+    badge.textContent = f.meta.kind;
+    const dateStr = new Date(f.modified).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    info.append(badge, document.createTextNode(`${f.name}  (${formatBytes(f.size)} · ${dateStr})`));
     const actions = document.createElement('span');
-    actions.style.cssText = 'display:flex;gap:4px';
+    actions.style.cssText = 'display:flex;gap:4px;flex-shrink:0';
     const dl = document.createElement('button');
     dl.textContent = 'Download';
     dl.style.cssText = 'margin:0;padding:3px 9px;font-size:12px';
@@ -476,13 +531,13 @@ async function showSaves() {
     del.title = 'Delete ' + f.name;
     del.style.cssText = 'margin:0;padding:3px 8px;font-size:12px;color:var(--err);border-color:transparent;background:transparent';
     del.onclick = async () => {
-      const dir = await getSaveDir();
-      if (!dir) return;
-      await dir.removeEntry(f.name);
+      if (!confirm(`Delete "${f.name}"?`)) return;
+      await f.dirHandle.removeEntry(f.name);
+      notifyFsChanged();
       row.remove();
       const remaining = list.querySelectorAll('div').length;
-      if (!remaining) { list.textContent = 'No saved games or recordings yet.'; }
-      $('save-count').textContent = remaining ? `${remaining} saved game${remaining > 1 ? 's' : ''}` : '';
+      if (!remaining) list.textContent = 'No saved games, replays, or scenarios yet.';
+      $('save-count').textContent = remaining ? `${remaining} saved file${remaining > 1 ? 's' : ''}` : '';
     };
     actions.append(dl, del);
     row.append(info, actions);
@@ -491,20 +546,34 @@ async function showSaves() {
   list.hidden = false;
 }
 
+async function importFiles(fileList) {
+  const list = Array.from(fileList || []);
+  if (!list.length) return;
+  let imported = 0, skipped = 0, firstName = '';
+  for (const file of list) {
+    const meta = saveFileMeta(file.name);
+    if (!meta) { skipped++; continue; }
+    const dir = await getTargetDirForExt(meta.folder, true);
+    await writeFileToDir(dir, file.name, file);
+    if (!firstName) firstName = file.name;
+    log(`Imported ${meta.kind.toLowerCase()}: ${file.name} (${meta.folder}/)`);
+    imported++;
+  }
+  if (imported) {
+    notifyFsChanged();
+    await refresh();
+    if (!$('saves-list').hidden) await showSaves(true);
+    toast(imported === 1 ? `Imported ${firstName}` : `Imported ${imported} files`);
+  } else if (skipped) {
+    toast('Unsupported file type (use .gax, .gam, .mgx, .mgl, .mgz, .msx, .scx, .scn)', 3500);
+  }
+}
+
 async function importRecording() {
   return new Promise((resolve) => {
     const input = $('rec-input');
     input.onchange = async () => {
-      if (!input.files.length) { resolve(); return; }
-      const file = input.files[0];
-      const r = await root();
-      const dir = await r.getDirectoryHandle('SaveGame', { create: true });
-      await writeFileToDir(dir, file.name, file);
-      log(`Imported recording: ${file.name}`);
-      toast(`Imported ${file.name}`);
-      input.value = '';
-      await refresh();
-      resolve();
+      try { await importFiles(input.files); } finally { input.value = ''; resolve(); }
     };
     input.click();
   });
@@ -609,6 +678,7 @@ function getHudHeight() {
 }
 
 let lastBox = null;
+let currentFrameW = 0, currentFrameH = 0;
 function syncScreenRect() {
   const sdl = $('canvas'), scr = $('screen'), scan = $('crt-scanlines');
   if (!lastBox || !sdl || !scr) return;
@@ -679,6 +749,8 @@ function presenter(module) {
       if (lastFrameW !== w || lastFrameH !== h) {
         lastFrameW = w;
         lastFrameH = h;
+        currentFrameW = w;
+        currentFrameH = h;
         if ($('res-badge')) $('res-badge').textContent = `${w}×${h}`;
         // AoE2 always uses 800x600 on menus and 640x480 on videos; only sync high-res match modes.
         if (w === 1024 || w === 1280) {
@@ -889,11 +961,17 @@ function setStatus(ok, text, onlinePlayers = 0, openRooms = 0) {
 }
 
 const playerName = () => ($('player').value.trim() || 'Player').slice(0, 15);
+let currentInviteUrl = '';
+
+function buildInviteUrl(room) {
+  const u = new URL(location.href);
+  u.search = `?join=${room.id}&room=${encodeURIComponent(room.name)}${room.password ? '&locked=1' : ''}`;
+  return u.toString();
+}
 
 function updateInviteBanner(rooms) {
   const banner = $('invite-banner');
   const urlEl = $('invite-url');
-  if (!banner || !urlEl) return;
   let targetRoom = null;
   if (hostedRoom && Array.isArray(rooms)) {
     targetRoom = rooms.find((r) => r.name === hostedRoom);
@@ -901,13 +979,17 @@ function updateInviteBanner(rooms) {
   if (!targetRoom && Array.isArray(rooms) && rooms.length === 1 && rooms[0].open) {
     targetRoom = rooms[0];
   }
-  if (targetRoom) {
-    const u = new URL(location.href);
-    u.search = `?join=${targetRoom.id}&room=${encodeURIComponent(targetRoom.name)}`;
-    urlEl.textContent = u.toString();
-    banner.hidden = false;
-  } else {
-    banner.hidden = true;
+  currentInviteUrl = targetRoom ? buildInviteUrl(targetRoom) : '';
+  if (banner && urlEl) {
+    if (targetRoom) {
+      urlEl.textContent = currentInviteUrl;
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  }
+  if ($('hud-invite-btn')) {
+    $('hud-invite-btn').hidden = !(gameRunning && hostedRoom && targetRoom && targetRoom.open && currentInviteUrl);
   }
 }
 
@@ -1054,9 +1136,7 @@ async function listRooms() {
     link.style.padding = '5px 10px';
     link.title = 'Copy direct invite link to clipboard';
     link.onclick = async () => {
-      const u = new URL(location.href);
-      u.search = `?join=${r.id}&room=${encodeURIComponent(r.name)}`;
-      if (await copyToClipboard(u.toString())) {
+      if (await copyToClipboard(buildInviteUrl(r))) {
         link.textContent = 'Copied!';
         toast('Invite link copied to clipboard');
         setTimeout(() => { link.textContent = 'Copy Link'; }, 1500);
@@ -1108,6 +1188,8 @@ window.addEventListener('offline', () => {
 });
 
 let gameRunning = false;
+let activeModule = null;
+let relayWsState = 'idle';
 let hostedRoom = null;
 let knownPlayers = new Set();
 let pingInterval = null;
@@ -1121,14 +1203,21 @@ async function measurePing() {
     const data = await r.json();
     const ms = Math.round(performance.now() - t0);
     const el = $('ping');
-    el.textContent = ms + ' ms';
-    el.style.color = ms < 100 ? '#74e888' : ms < 250 ? '#f0c25b' : '#f26d6d';
+    if (relayWsState !== 'reconnecting' && relayWsState !== 'lost') {
+      el.textContent = ms + ' ms';
+      el.style.color = ms < 100 ? '#74e888' : ms < 250 ? '#f0c25b' : '#f26d6d';
+    }
     const rooms = data.rooms || [];
     const totalPlayers = rooms.reduce((s, rm) => s + rm.players.length, 0);
-    setStatus(true, totalPlayers ? `${totalPlayers} online · ${ms}ms` : `connected · ${ms}ms`, totalPlayers, rooms.length);
+    if (relayWsState !== 'reconnecting' && relayWsState !== 'lost') {
+      setStatus(true, totalPlayers ? `${totalPlayers} online · ${ms}ms` : `connected · ${ms}ms`, totalPlayers, rooms.length);
+    }
     checkHostedRoomJoins(rooms);
+    updateInviteBanner(rooms);
   } catch {
-    $('ping').textContent = '';
+    if (relayWsState !== 'reconnecting' && relayWsState !== 'lost') {
+      $('ping').textContent = '';
+    }
   }
 }
 
@@ -1244,8 +1333,92 @@ function notifyJoin(name) {
   }
 }
 
+let pointerLocked = false;
+let plFracX = 0, plFracY = 0;
+const lockedButtonsDown = new Set();
+
+function exitPointerLockIfHeld() {
+  if (document.pointerLockElement === $('canvas')) {
+    try { document.exitPointerLock?.(); } catch {}
+  }
+}
+
+function togglePointerLock() {
+  const sdl = $('canvas');
+  if (!sdl) return;
+  if (document.pointerLockElement === sdl) {
+    exitPointerLockIfHeld();
+    return;
+  }
+  if (!gameRunning || !$('setup').hidden || !$('help-overlay').hidden) return;
+  try {
+    const res = sdl.requestPointerLock?.();
+    if (res && typeof res.catch === 'function') {
+      res.catch(() => toast('Click the game screen or press Alt+L to lock mouse', 2200));
+    }
+  } catch {
+    toast('Could not lock mouse pointer', 2000);
+  }
+}
+
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === $('canvas');
+  pointerLocked = locked;
+  plFracX = 0;
+  plFracY = 0;
+  if (!locked && lockedButtonsDown.size) {
+    for (const b of lockedButtonsDown) {
+      try { activeModule?._web_input_button?.(b, 0); } catch {}
+    }
+    lockedButtonsDown.clear();
+  }
+  if ($('lock-btn')) {
+    $('lock-btn').textContent = locked ? '🔒 Locked' : '🔓 Lock';
+    $('lock-btn').classList.toggle('active', locked);
+  }
+  if (locked) {
+    toast('Mouse locked — move to screen edges to scroll (Esc to release)', 2400);
+  }
+});
+
+document.addEventListener('pointerlockerror', () => {
+  toast('Could not lock mouse pointer', 2000);
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!pointerLocked || document.pointerLockElement !== $('canvas') || !activeModule?._web_input_motion) return;
+  e.stopImmediatePropagation();
+  const mx = e.movementX || 0, my = e.movementY || 0;
+  if (Math.abs(mx) > 400 || Math.abs(my) > 400) return;
+  const sdl = $('canvas');
+  const rect = sdl.getBoundingClientRect();
+  const fw = currentFrameW || 800, fh = currentFrameH || 600;
+  const picCssW = lastBox && lastBox.cw > 0 ? rect.width * (lastBox.dw / lastBox.cw) : rect.width;
+  const picCssH = lastBox && lastBox.ch > 0 ? rect.height * (lastBox.dh / lastBox.ch) : rect.height;
+  if (picCssW <= 0 || picCssH <= 0) return;
+  plFracX += (mx * fw) / picCssW;
+  plFracY += (my * fh) / picCssH;
+  const dx = Math.trunc(plFracX), dy = Math.trunc(plFracY);
+  plFracX -= dx;
+  plFracY -= dy;
+  if (dx || dy) activeModule._web_input_motion(dx, dy);
+}, true);
+
+for (const evtName of ['mousedown', 'mouseup']) {
+  window.addEventListener(evtName, (e) => {
+    if (!pointerLocked || document.pointerLockElement !== $('canvas') || !activeModule?._web_input_button) return;
+    e.stopImmediatePropagation();
+    if (e.button !== 0) e.preventDefault();
+    const down = evtName === 'mousedown';
+    if (down) lockedButtonsDown.add(e.button);
+    else lockedButtonsDown.delete(e.button);
+    activeModule._web_input_button(e.button, down ? 1 : 0);
+  }, true);
+}
+
 function openOnline() {
   if (!$('setup').hidden) return;
+  exitPointerLockIfHeld();
   $('play').textContent = gameRunning ? 'Resume Game (Esc)' : 'Play';
   $('setup').hidden = false;
   refresh();
@@ -1264,8 +1437,12 @@ function closeOnline() {
 }
 
 function returnToLobby(msg) {
+  exitPointerLockIfHeld();
   gameRunning = false;
+  activeModule = null;
+  relayWsState = 'idle';
   hostedRoom = null;
+  currentInviteUrl = '';
   stopPingPolling();
   releaseWakeLock();
   stopGameTimer();
@@ -1273,6 +1450,7 @@ function returnToLobby(msg) {
   setHudCollapsed(false);
   $('loading').hidden = true;
   $('game-ui').hidden = true;
+  if ($('hud-invite-btn')) $('hud-invite-btn').hidden = true;
   $('canvas').hidden = true;
   $('screen').hidden = true;
   if ($('crt-scanlines')) $('crt-scanlines').hidden = true;
@@ -1410,6 +1588,7 @@ async function play(launch) {
       return {};
     },
     preRun: [(m) => {
+      activeModule = m;
       m.ENV.AOE2_ACCEPT_EULA = '1';
       m.ENV.AOE2_RESOLUTION = launchedRes;
       if (debugTrace) m.ENV.AOE2_TRACE_VIDEO = '1';
@@ -1444,6 +1623,35 @@ async function play(launch) {
     },
     onAbort(what) {
       returnToLobby('The game stopped: ' + what);
+    },
+    onRelayState(state, attempt) {
+      const prev = relayWsState;
+      relayWsState = state;
+      const dot = $('hud-online-dot');
+      const pingEl = $('ping');
+      if (state === 'connected') {
+        if (dot) dot.className = 'ok';
+        if (prev === 'reconnecting' || prev === 'lost') {
+          toast('Reconnected to multiplayer relay');
+          log('Reconnected to multiplayer relay.');
+        }
+        measurePing();
+      } else if (state === 'reconnecting') {
+        if (dot) dot.className = 'err';
+        if (pingEl) {
+          pingEl.textContent = `Reconnecting (${attempt}/5)…`;
+          pingEl.style.color = '#f0c25b';
+        }
+        toast(`Relay disconnected — reconnecting (${attempt}/5)…`, 2500);
+      } else if (state === 'lost') {
+        if (dot) dot.className = 'err';
+        if (pingEl) {
+          pingEl.textContent = 'Disconnected';
+          pingEl.style.color = '#f26d6d';
+        }
+        log('Multiplayer relay connection lost.');
+        toast('Multiplayer connection lost — check your network', 6000);
+      }
     },
     relayUrl: resolveRelayWsUrl(),
     print: (t) => console.log(t),
@@ -1523,10 +1731,43 @@ async function init() {
     sessionStorage.removeItem('aoe2.pendingPass');
   } catch {}
   let launch;
+  let openLobbyOnBoot = false;
   if (joinId) {
     history.replaceState(null, '', location.pathname);
-    launch = { lobby: 'join:' + joinId, room: roomParam, password: pendingPass };
-    log('Joining game from invite link…');
+    let target = null;
+    let roomsKnown = false;
+    try {
+      const r = await fetchRelay('/rooms', 4000);
+      if (r.ok) {
+        const data = await r.json();
+        roomsKnown = true;
+        target = (data.rooms || []).find((rm) => String(rm.id) === String(joinId)) || null;
+      }
+    } catch {}
+    if (roomsKnown && !target) {
+      toast('Invite room no longer exists — opened multiplayer lobby.', 4000);
+      log('Invite room is no longer available.');
+      openLobbyOnBoot = true;
+    } else if (target && !target.open) {
+      toast('That game has already started — opened multiplayer lobby.', 4000);
+      log(`Room "${target.name}" has already started.`);
+      openLobbyOnBoot = true;
+    } else {
+      const needsPass = Boolean((target && target.password) || params.get('locked') === '1');
+      if (needsPass && !pendingPass) {
+        const label = (target && target.name) || roomParam || 'this room';
+        const entered = window.prompt(`Enter password for "${label}":`);
+        if (entered === null) {
+          openLobbyOnBoot = true;
+        } else {
+          pendingPass = entered;
+        }
+      }
+      if (!openLobbyOnBoot) {
+        launch = { lobby: 'join:' + joinId, room: (target && target.name) || roomParam, password: pendingPass };
+        log('Joining game from invite link…');
+      }
+    }
   } else if (hostParam) {
     history.replaceState(null, '', location.pathname);
     const room = (roomParam || `${playerName()}'s game`).slice(0, 30);
@@ -1568,6 +1809,11 @@ async function init() {
   link.crossOrigin = '';
   document.head.appendChild(link);
   await refresh();
+  if (openLobbyOnBoot) {
+    $('loading').hidden = true;
+    openOnline();
+    return;
+  }
   await play(launch);
 }
 
@@ -1618,11 +1864,42 @@ $('copy-invite').onclick = async () => {
 };
 $('retry-btn').onclick = () => location.reload();
 $('chat-send').onclick = sendChat;
-$('saves-btn').onclick = showSaves;
+$('saves-btn').onclick = () => showSaves();
 $('import-rec').onclick = importRecording;
+if ($('hud-saves-btn')) $('hud-saves-btn').onclick = () => { openOnline(); showSaves(true); };
+if ($('hud-invite-btn')) {
+  $('hud-invite-btn').onclick = async () => {
+    if (!currentInviteUrl) return;
+    if (await copyToClipboard(currentInviteUrl)) {
+      toast('Invite link copied to clipboard');
+    } else {
+      toast('Copy failed — open Online lobby to copy link', 3000);
+    }
+  };
+}
+if ($('lock-btn')) $('lock-btn').onclick = togglePointerLock;
+const setupPanel = $('setup-panel');
+if (setupPanel) {
+  setupPanel.addEventListener('dragover', (e) => {
+    if ($('setup').hidden || $('import-rec').hidden) return;
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    setupPanel.classList.add('drop-active');
+  });
+  setupPanel.addEventListener('dragleave', (e) => {
+    if (!setupPanel.contains(e.relatedTarget)) setupPanel.classList.remove('drop-active');
+  });
+  setupPanel.addEventListener('drop', (e) => {
+    setupPanel.classList.remove('drop-active');
+    if ($('setup').hidden || $('import-rec').hidden) return;
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    importFiles(e.dataTransfer.files);
+  });
+}
 $('mute-btn').onclick = toggleMute;
 $('fullscreen-btn').onclick = toggleFullscreen;
-$('hud-help-btn').onclick = () => { $('help-overlay').hidden = false; $('help-close').focus(); };
+$('hud-help-btn').onclick = () => { exitPointerLockIfHeld(); $('help-overlay').hidden = false; $('help-close').focus(); };
 $('canvas').addEventListener('contextmenu', (e) => e.preventDefault());
 $('setup').onclick = (e) => { if (gameRunning && e.target === $('setup')) closeOnline(); };
 $('help-link').onclick = (e) => { e.preventDefault(); $('help-overlay').hidden = false; $('help-close').focus(); };
@@ -1697,6 +1974,12 @@ window.addEventListener('keydown', (e) => {
   if (e.altKey && (e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     toggleMute();
+    e.stopImmediatePropagation();
+    return;
+  }
+  if (e.altKey && (e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    togglePointerLock();
     e.stopImmediatePropagation();
   }
 }, true);
