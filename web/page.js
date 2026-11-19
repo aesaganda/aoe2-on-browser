@@ -637,13 +637,35 @@ function initWebGL(canvas) {
 }
 
 const VALID_RES = ['800', '1024', '1280', '1280x720', '1366x768', '1600x900', '1920x1080'];
+const WIDE_RES = [[1920, 1080], [1600, 900], [1366, 768], [1280, 720]];
+// 'auto' picks the largest 16:9 mode that fits the physical screen, so a
+// 1080p monitor renders 1:1 instead of upscaling 1366x768 (and a 4K one gets a clean 2x).
+function resolveAutoRes() {
+  const dpr = window.devicePixelRatio || 1;
+  const pw = Math.round((screen.width || window.innerWidth) * dpr);
+  const ph = Math.round((screen.height || window.innerHeight) * dpr);
+  const sw = Math.max(pw, ph), sh = Math.min(pw, ph);
+  if (sw / sh < 1.5) return sw >= 1280 && sh >= 1024 ? '1280' : (sw >= 1024 && sh >= 768 ? '1024' : '800');
+  for (const [w, h] of WIDE_RES) if (w <= sw && h <= sh) return `${w}x${h}`;
+  return '1280x720';
+}
+function resolveRes(pref) { return pref === 'auto' ? resolveAutoRes() : pref; }
+function resLabel(res) {
+  if (res === '800') return '800×600';
+  if (res === '1024') return '1024×768';
+  if (res === '1280') return '1280×1024';
+  return res.replace('x', '×');
+}
+// Stored under a new key so everyone starts on 'auto' once; the old key was
+// overwritten with the in-game frame size, so it can't tell a real choice apart.
 let selectedRes = (() => {
   try {
-    const v = localStorage.getItem('aoe2.res');
-    return VALID_RES.includes(v) ? v : '1366x768';
-  } catch { return '1366x768'; }
+    const v = localStorage.getItem('aoe2.res2');
+    return v === 'auto' || VALID_RES.includes(v) ? v : 'auto';
+  } catch { return 'auto'; }
 })();
-let launchedRes = selectedRes;
+let launchedRes = resolveRes(selectedRes);
+if ($('res-auto-opt')) $('res-auto-opt').textContent = `Auto — match screen (${resLabel(resolveAutoRes())})`;
 if ($('res-select')) $('res-select').value = selectedRes;
 
 const SCALE_MODES = ['smooth', 'sharp', 'crt'];
@@ -670,12 +692,54 @@ function applyScaleMode(nextMode, showToast) {
 }
 applyScaleMode(scaleMode, false);
 
-let hudUserCollapsed = false;
-function getHudHeight() {
-  const ui = $('game-ui');
-  if (!ui || ui.hidden || document.body.classList.contains('hud-collapsed') || document.fullscreenElement) return 0;
-  return Math.round(ui.getBoundingClientRect().height || 36);
+// --- Top HUD bar: an overlay that never takes space from the game picture ---
+// It slides away a few seconds after the game starts and comes back when the
+// mouse rests on the top edge (or with Alt+H, which pins it open).
+let hudPinned = false, hudHideTimer = 0, hudEdgeTimer = 0, hudHintShown = false;
+const HUD_EDGE_PX = 3, HUD_EDGE_DWELL_MS = 450;
+function hudVisible() { return !document.body.classList.contains('hud-hidden'); }
+function showHud(pin) {
+  clearTimeout(hudHideTimer);
+  clearTimeout(hudEdgeTimer);
+  hudEdgeTimer = 0;
+  if (pin) hudPinned = true;
+  document.body.classList.remove('hud-hidden');
 }
+function hideHud() {
+  hudPinned = false;
+  clearTimeout(hudHideTimer);
+  document.body.classList.add('hud-hidden');
+  const ui = $('game-ui');
+  if (ui && ui.contains(document.activeElement) && gameRunning && $('setup').hidden) $('canvas').focus();
+}
+function scheduleHudHide(ms) {
+  if (hudPinned) return;
+  clearTimeout(hudHideTimer);
+  hudHideTimer = setTimeout(() => {
+    const ui = $('game-ui');
+    if (hudPinned || !gameRunning || (ui && ui.matches(':hover'))) return;
+    hideHud();
+  }, ms);
+}
+function toggleHud() {
+  if (hudVisible() && hudPinned) hideHud();
+  else showHud(true);
+}
+window.addEventListener('mousemove', (e) => {
+  if (!gameRunning || !$('setup').hidden || $('game-ui').hidden) return;
+  if (!hudVisible()) {
+    if (e.clientY <= HUD_EDGE_PX) {
+      if (!hudEdgeTimer) hudEdgeTimer = setTimeout(() => { hudEdgeTimer = 0; showHud(false); }, HUD_EDGE_DWELL_MS);
+    } else if (hudEdgeTimer) {
+      clearTimeout(hudEdgeTimer);
+      hudEdgeTimer = 0;
+    }
+  } else if (!hudPinned) {
+    const barBottom = $('game-ui').getBoundingClientRect().bottom;
+    if (e.clientY > barBottom + 24) scheduleHudHide(600);
+    else clearTimeout(hudHideTimer);
+  }
+});
 
 let lastBox = null;
 let currentFrameW = 0, currentFrameH = 0;
@@ -686,12 +750,11 @@ function syncScreenRect() {
   if (cw <= 0 || ch <= 0) return;
   let r = sdl.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) {
-    const topOff = getHudHeight();
     const ar = (currentFrameW > 0 && currentFrameH > 0) ? (currentFrameW / currentFrameH) : (4 / 3);
-    const vw = window.innerWidth, vh = Math.max(100, window.innerHeight - topOff);
+    const vw = window.innerWidth, vh = Math.max(100, window.innerHeight);
     const w = Math.min(vw, vh * ar);
     const h = Math.min(vh, vw / ar);
-    r = { left: (vw - w) / 2, top: topOff + (vh - h) / 2, width: w, height: h };
+    r = { left: (vw - w) / 2, top: (vh - h) / 2, width: w, height: h };
   }
   const sx = r.width / cw, sy = r.height / ch;
   const box = {
@@ -703,20 +766,8 @@ function syncScreenRect() {
   Object.assign(scr.style, box);
   if (scan) Object.assign(scan.style, box);
 }
-function setHudCollapsed(collapsed) {
-  hudUserCollapsed = Boolean(collapsed);
-  document.body.classList.toggle('hud-collapsed', hudUserCollapsed);
-  if ($('hud-restore-btn')) {
-    $('hud-restore-btn').hidden = !hudUserCollapsed || !gameRunning || Boolean(document.fullscreenElement);
-  }
-  syncScreenRect();
-  requestAnimationFrame(syncScreenRect);
-}
 window.addEventListener('resize', syncScreenRect);
 document.addEventListener('fullscreenchange', () => {
-  if ($('hud-restore-btn')) {
-    $('hud-restore-btn').hidden = !hudUserCollapsed || !gameRunning || Boolean(document.fullscreenElement);
-  }
   syncScreenRect();
   requestAnimationFrame(syncScreenRect);
 });
@@ -762,9 +813,13 @@ function presenter(module) {
                       : VALID_RES.includes(`${w}x${h}`) ? `${w}x${h}` : '';
         if (modeKey) {
           launchedRes = modeKey;
-          selectedRes = launchedRes;
-          try { localStorage.setItem('aoe2.res', launchedRes); } catch {}
-          if ($('res-select')) $('res-select').value = launchedRes;
+          // Keep 'auto' while the game runs at the auto-picked mode; only a different
+          // mode (changed from the in-game options) becomes an explicit choice.
+          if (!(selectedRes === 'auto' && modeKey === resolveAutoRes())) {
+            selectedRes = modeKey;
+            try { localStorage.setItem('aoe2.res2', selectedRes); } catch {}
+            if ($('res-select')) $('res-select').value = selectedRes;
+          }
           if ($('apply-res')) $('apply-res').hidden = true;
         }
       }
@@ -776,7 +831,12 @@ function presenter(module) {
       if (firstFrame) {
         $('loading').hidden = true;
         $('game-ui').hidden = false;
-        if ($('hud-restore-btn')) $('hud-restore-btn').hidden = !hudUserCollapsed || Boolean(document.fullscreenElement);
+        showHud(false);
+        scheduleHudHide(4000);
+        if (!hudHintShown) {
+          hudHintShown = true;
+          setTimeout(() => toast('Top bar auto-hides — rest the mouse on the top edge or press Alt+H', 4000), 4200);
+        }
         syncScreenRect();
         requestAnimationFrame(syncScreenRect);
         fpsLast = performance.now();
@@ -1542,7 +1602,9 @@ function returnToLobby(msg) {
   releaseSessionLock();
   stopGameTimer();
   updateVisibilityWarning();
-  setHudCollapsed(false);
+  hudPinned = false;
+  clearTimeout(hudHideTimer);
+  document.body.classList.remove('hud-hidden');
   $('loading').hidden = true;
   $('game-ui').hidden = true;
   if ($('hud-invite-btn')) $('hud-invite-btn').hidden = true;
@@ -1586,7 +1648,7 @@ async function play(launch) {
     location.href = u.toString();
     return;
   }
-  launchedRes = selectedRes;
+  launchedRes = resolveRes(selectedRes);
   if ($('apply-res')) $('apply-res').hidden = true;
   if (launch && launch.lobby) {
     if (launch.lobby === 'host') {
@@ -1946,9 +2008,9 @@ $('host').onclick = () => {
 if ($('res-select')) {
   $('res-select').onchange = () => {
     const val = $('res-select').value;
-    selectedRes = VALID_RES.includes(val) ? val : '1366x768';
-    try { localStorage.setItem('aoe2.res', selectedRes); } catch {}
-    if ($('apply-res')) $('apply-res').hidden = !gameRunning || (selectedRes === launchedRes);
+    selectedRes = val === 'auto' || VALID_RES.includes(val) ? val : 'auto';
+    try { localStorage.setItem('aoe2.res2', selectedRes); } catch {}
+    if ($('apply-res')) $('apply-res').hidden = !gameRunning || (resolveRes(selectedRes) === launchedRes);
   };
 }
 if ($('apply-res')) $('apply-res').onclick = () => location.reload();
@@ -1962,8 +2024,7 @@ if ($('scale-btn')) {
 if ($('volume-slider')) {
   $('volume-slider').oninput = () => setVolume(Number($('volume-slider').value) / 100);
 }
-if ($('hud-collapse-btn')) $('hud-collapse-btn').onclick = () => setHudCollapsed(true);
-if ($('hud-restore-btn')) $('hud-restore-btn').onclick = () => setHudCollapsed(false);
+if ($('hud-collapse-btn')) $('hud-collapse-btn').onclick = hideHud;
 $('refresh-rooms').onclick = () => { listRooms(); };
 $('copy-invite').onclick = async () => {
   const u = $('invite-url').textContent;
@@ -2091,6 +2152,12 @@ window.addEventListener('keydown', (e) => {
     e.stopImmediatePropagation();
     return;
   }
+  if (e.altKey && (e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey && gameRunning) {
+    e.preventDefault();
+    toggleHud();
+    e.stopImmediatePropagation();
+    return;
+  }
   if (e.altKey && (e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     togglePointerLock();
@@ -2130,5 +2197,5 @@ if ('serviceWorker' in navigator) {
     });
   }).catch(() => {});
 }
-navigator.storage.persist?.();
+navigator.storage?.persist?.();
 init();
