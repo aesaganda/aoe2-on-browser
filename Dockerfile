@@ -1,4 +1,10 @@
+# Multi-arch (amd64, arm64, arm/v7): pure Python + websockets, no native build step.
+# Built and pushed with `make image-push` (docs/docker-nginx.md, section 6).
 FROM python:3.12-slim
+
+LABEL org.opencontainers.image.source="https://github.com/aesaganda/aoe2-on-browser" \
+      org.opencontainers.image.title="aoe2-recomp-web" \
+      org.opencontainers.image.description="Web server and multiplayer relay for the AoE2 recomp browser build (no game data inside)"
 
 ARG AOE2_VERSION=""
 ENV PYTHONUNBUFFERED=1 \

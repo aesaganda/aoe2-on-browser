@@ -13,7 +13,7 @@ GEN        := $(BUILD)/lift/gen
 GEN_STAMP  := $(GEN)/recomp_funcs.h
 PYTEST     := $(PY) -m pytest -q -p no:cacheprovider -n auto -rA
 
-.PHONY: help setup recon ghidra docs lift native native-trace web test test-synthetic test-binary test-pcrecomp sweep clean
+.PHONY: help setup recon ghidra docs lift native native-trace web test test-synthetic test-binary test-pcrecomp sweep image-push clean
 
 help:
 	@echo "make setup        one-time toolchain (venv, Ghidra) - see tools/setup-wsl.sh"
@@ -73,6 +73,19 @@ web: $(GEN_STAMP)
 # Every leaf function (not just the 20 prototypes), 150 random states each: ~13 min on 20 cores.
 sweep: $(GEN_STAMP)
 	$(PY) tools/lift/sweep.py $(EXE) $(GEN) $(BUILD)/ghidra/leaves.json --out $(BUILD)/lift/sweep.json | tee $(BUILD)/lift/sweep.log
+
+# Multi-arch web/relay image -> ghcr.io (needs `docker login ghcr.io`, docker-buildx,
+# qemu-user-static; docs/docker-nginx.md section 6). Tags :latest and :sha-<commit>.
+IMAGE          ?= ghcr.io/aesaganda/aoe2-recomp-web
+IMAGE_PLATFORMS ?= linux/amd64,linux/arm64,linux/arm/v7
+IMAGE_BUILDER  ?= aoe2-multi
+IMAGE_SHA      := $(shell git -c safe.directory='*' rev-parse --short HEAD 2>/dev/null)$(shell git -c safe.directory='*' diff --quiet HEAD -- Dockerfile deploy/requirements.txt tools/web/serve.py tools/net/relay.py web 2>/dev/null || echo -dirty)
+
+image-push:
+	docker buildx inspect $(IMAGE_BUILDER) >/dev/null 2>&1 || docker buildx create --name $(IMAGE_BUILDER) --driver docker-container
+	docker buildx build --builder $(IMAGE_BUILDER) --platform $(IMAGE_PLATFORMS) \
+	  --build-arg AOE2_VERSION=$(IMAGE_SHA) \
+	  -t $(IMAGE):latest -t $(IMAGE):sha-$(IMAGE_SHA) --push .
 
 clean:
 	rm -rf $(BUILD)

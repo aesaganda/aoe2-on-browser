@@ -88,6 +88,47 @@ Copyrighted game assets (`build/web/`, `install/`) are never baked into the Dock
 
 ---
 
+## 4b. Alternative: Nginx Proxy Manager on another LAN host (e.g. Raspberry Pi)
+
+Use this instead of section 3 when TLS is terminated by a dockerized Nginx Proxy Manager (NPM) on a different machine and the stack runs in Docker Engine inside WSL2 on Windows.
+
+```text
+Internet ──443──► Pi: NPM (TLS, HSTS) ──http──► Windows <LAN IP>:8642
+                                                  │ netsh portproxy
+                                                  ▼
+                                    127.0.0.1:8642 (WSL localhost forwarding)
+                                                  ▼
+                                    WSL Docker `gateway` (unchanged, AOE2_BIND=127.0.0.1)
+```
+
+1. **Windows side** (elevated PowerShell, from the repo's `deploy/windows/` folder). Give the Windows PC a DHCP reservation first so its LAN IP is stable:
+   ```powershell
+   .\expose-to-lan.ps1 -ListenAddress <windows-lan-ip> -ProxyHost <pi-lan-ip>
+   ```
+   This adds a port proxy `<windows-lan-ip>:8642 → 127.0.0.1:8642` and a firewall rule that only admits the Pi. Undo with `-Remove`.
+2. **Check from the Pi:** `curl -i http://<windows-lan-ip>:8642/health` → `200` with `Cross-Origin-Embedder-Policy: require-corp`.
+3. **NPM → Hosts → Proxy Hosts → Add:**
+   - *Details*: domain `aoe2.example.com`, scheme `http`, forward hostname `<windows-lan-ip>`, port `8642`.
+     **Websockets Support: ON**. **Cache Assets: OFF** (the gateway already sets `Cache-Control`). Block Common Exploits may stay on.
+   - *SSL*: Let's Encrypt certificate, Force SSL, HTTP/2, HSTS.
+   - *Advanced* (custom Nginx configuration — inherited by NPM's `location /`):
+     ```nginx
+     # long-lived DirectPlay WebSocket (/relay)
+     proxy_read_timeout 3600s;
+     proxy_send_timeout 3600s;
+     # stream the ~585 MB /install/bundle.tar instead of spooling it to the Pi's SD card
+     proxy_buffering off;
+     proxy_request_buffering off;
+     proxy_max_temp_file_size 0;
+     ```
+4. Run the checklist in section 4 against the public domain. COOP/COEP/CSP come from the gateway and pass through NPM unchanged; HSTS comes from NPM. Real client IPs survive the chain: NPM sends `X-Forwarded-For`/`X-Real-IP`, and the gateway trusts private-range hops.
+
+Notes:
+- The containers only run while the WSL distro is up. `vmIdleTimeout=-1` in `.wslconfig` keeps it alive once started, but after a Windows reboot something must start it (e.g. a scheduled task at startup running `wsl -d ubuntu-24.04 -u root -- true`).
+- If the Pi is on the same Tailscale tailnet, you can point NPM at the PC's Tailscale IP instead and skip the DHCP reservation (use that IP as `-ListenAddress`).
+
+---
+
 ## 5. Updating After Rebuilds & Optional Native TCP Port
 
 - **Updating frontend or WASM builds**: Run `make web` on the host; Nginx and `/api/version` pick up the updated `aoe2.wasm` / `web/` mount automatically. If `AOE2_INSTALL_DIR` contents change, restart the `web` service to refresh its tar bundle index:
@@ -95,3 +136,41 @@ Copyrighted game assets (`build/web/`, `install/`) are never baked into the Dock
   docker compose restart web
   ```
 - **Exposing TCP port `8644` for native `build/native/aoe2` clients**: Uncomment the `ports:` section under `relay` in `docker-compose.yml` (`8644:8644`) and recreate the container (`docker compose up -d relay`).
+
+---
+
+## 6. Running on a Raspberry Pi or Mac (multi-arch image on ghcr.io)
+
+The `relay` and `web` services are plain Python (`websockets` only) and the game itself runs as WebAssembly in the player's browser, so the server side has no x86 dependency. `ghcr.io/aesaganda/aoe2-recomp-web` is published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`; `nginx:1.27-alpine` is multi-arch too.
+
+| Host | Platform pulled |
+| --- | --- |
+| Raspberry Pi 3/4/5, 64-bit Raspberry Pi OS / Ubuntu | `linux/arm64` |
+| Raspberry Pi 2/3/4, 32-bit Raspberry Pi OS | `linux/arm/v7` |
+| Mac with Apple Silicon (Docker Desktop, OrbStack, Colima) | `linux/arm64` |
+| Intel Mac, x86 Linux | `linux/amd64` |
+
+**What the image does not contain** (ADR-0002): `build/web/` (`aoe2.js`, `aoe2.wasm`) and the `install/` game data. Build them on the x86 Linux/WSL machine (`make web`) and copy them to the Pi/Mac; the `.wasm` is architecture-independent. Then on the Pi/Mac:
+
+```bash
+git clone https://github.com/aesaganda/aoe2-on-browser.git && cd aoe2-on-browser
+cp .env.example .env                       # point AOE2_BUILD_DIR / AOE2_INSTALL_DIR at the copied folders
+rsync -a <pc>:aoe2-recomp-backup/build/web/ ./build/web/
+rsync -a <pc>:aoe2-recomp-work/install/ ../aoe2-recomp-work/install/
+docker login ghcr.io                       # only while the package is private
+docker compose pull
+docker compose up -d --no-build
+```
+
+Notes:
+- On a Pi, keep `install/` on an SSD rather than the SD card: `web` streams the ~585 MB `/install/bundle.tar` from it to each new player.
+- On macOS, the bind-mounted folders must be inside a path Docker Desktop shares (by default `/Users`).
+- `docker compose up -d --build` still works on any of these hosts; it builds natively for the host's architecture.
+
+**Publishing a new image** (on the x86 build machine, once: `apt install docker-buildx qemu-user-static` and `docker login ghcr.io` with a PAT that has `write:packages`):
+
+```bash
+make image-push          # buildx: amd64 + arm64 + arm/v7, tags :latest and :sha-<commit>
+```
+
+Under WSL, systemd does not register QEMU at boot; if `docker buildx inspect aoe2-multi` lists no `linux/arm64`, run `sudo /usr/lib/systemd/systemd-binfmt /usr/lib/binfmt.d/qemu-*.conf` once per WSL start.

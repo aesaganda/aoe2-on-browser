@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
       args:
         AOE2_VERSION: "${AOE2_VERSION:-}"
-    image: aoe2-recomp-web:latest
+    image: "${AOE2_IMAGE:-ghcr.io/aesaganda/aoe2-recomp-web}:${AOE2_IMAGE_TAG:-latest}"
     command:
       - python3
       - /app/tools/net/relay.py
@@ -59,7 +59,7 @@ services:
       dockerfile: Dockerfile
       args:
         AOE2_VERSION: "${AOE2_VERSION:-}"
-    image: aoe2-recomp-web:latest
+    image: "${AOE2_IMAGE:-ghcr.io/aesaganda/aoe2-recomp-web}:${AOE2_IMAGE_TAG:-latest}"
     command:
       - python3
       - /app/tools/web/serve.py
