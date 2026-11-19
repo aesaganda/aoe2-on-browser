@@ -28,17 +28,26 @@ void mciwnd_register(void);        /* mciwnd.c: the AVI cinematics */
 void dplay_net_install(void);      /* src/net/dplay_net.c: multiplayer over the relay */
 void ddraw_debug_register(void);   /* ddraw_debug.c: AOE2_TRACE_BLT / AOE2_DUMP_SURFACES */
 
+#define HKCU 0x80000001u
 #define HKLM 0x80000002u
 #define AOC_KEY "Software\\Microsoft\\Microsoft Games\\Age of Empires II: The Conquerors Expansion\\1.0"
 #define AOK_KEY "Software\\Microsoft\\Microsoft Games\\Age of Empires\\2.0"
 
-static void seed_registry(int disc) {
+static void seed_registry(int disc, int first_reg) {
     /* What the installer writes and the game reads at start. Values are added here
      * as the boot log shows the game asking for them (see docs/phase1-bringup.md). */
     hle_reg_set_string(HKLM, AOC_KEY, "EXE Path", "C:\\age2_x1");
     hle_reg_set_string(HKLM, AOC_KEY, "CDPath", disc ? "D:\\" : "C:\\");
     hle_reg_set_string(HKLM, AOK_KEY, "EXE Path", "C:\\");
     hle_reg_set_string(HKLM, AOK_KEY, "CDPath", "C:\\");
+
+    const char *res_env = getenv("AOE2_RESOLUTION");
+    int res = res_env ? atoi(res_env) : 0;
+    if (res == 800 || res == 1024 || res == 1280) {
+        hle_reg_set_dword(HKCU, AOC_KEY, "Screen Size", (uint32_t)res);
+    } else if (first_reg) {
+        hle_reg_set_dword(HKCU, AOC_KEY, "Screen Size", 1024u);
+    }
 }
 
 #ifdef __EMSCRIPTEN__
@@ -86,7 +95,11 @@ int main(int argc, char **argv) {
     recomp_host_init();
     dplay_stub_register_com();
     win32_gaps_register();          /* last: fills only what win32hle does not answer */
-    seed_registry(have_disc);
+    static char reg_path[PATH_MAX + 32];
+    snprintf(reg_path, sizeof reg_path, "%s/registry.ini", root);
+    int first_reg = (access(reg_path, F_OK) != 0);
+    hle_reg_load(reg_path);
+    seed_registry(have_disc, first_reg);
     /* The SDL window DirectDraw presents into (pcrecomp screen.c). AOE2_HEADLESS=1: none. */
     const char *hl = getenv("AOE2_HEADLESS");
     if (hle_screen_open("Age of Empires II: The Conquerors", 0, hl && !strcmp(hl, "1")) != 0)
@@ -94,10 +107,22 @@ int main(int argc, char **argv) {
     edit_overlay_install();         /* EDIT controls over the picture (chains screen.c's hook) */
     dplay_net_install();            /* DirectPlay's messages, taken at each pump (chains the poll hook) */
     /* The game's own command-line switches (NOSTARTUP, DONTIGNORESYNC, ...): AOE2_ARGS.
-     * GetCommandLineA answers the exe's Windows path with them, as the shortcut would. */
+     * GetCommandLineA answers the exe's Windows path with them, as the shortcut would.
+     * Pass AOE2_RESOLUTION (800/1024/1280) on the command line as well so AoE2's
+     * profile loader (0x0046A990) does not overwrite the requested resolution with a
+     * previously saved 800x600 player.nfz value. */
     static char cmdline[1024];
     const char *args = getenv("AOE2_ARGS");
-    snprintf(cmdline, sizeof cmdline, "\"C:\\age2_x1\\age2_x1.exe\"%s%s", args && *args ? " " : "", args ? args : "");
+    const char *res_env = getenv("AOE2_RESOLUTION");
+    int res = res_env ? atoi(res_env) : 0;
+    const char *res_arg = "";
+    if ((res == 800 || res == 1024 || res == 1280) &&
+        (!args || (!strstr(args, "800") && !strstr(args, "1024") && !strstr(args, "1280")))) {
+        res_arg = (res == 1280) ? "1280" : (res == 1024) ? "1024" : "800";
+    }
+    snprintf(cmdline, sizeof cmdline, "\"C:\\age2_x1\\age2_x1.exe\"%s%s%s%s",
+             (args && *args) ? " " : "", args ? args : "",
+             *res_arg ? " " : "", res_arg);
     hle_set_command_line(cmdline);
     if (recomp_host_boot_permissive(exe) != 0) {
         fprintf(stderr, "boot failed: %s\n", exe);

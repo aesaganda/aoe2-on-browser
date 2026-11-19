@@ -31,7 +31,10 @@
     --err: #ee5555;
     --ok: #52c468;
     --warn: #e5a93c;
+    --hud-h: 36px;
   }
+  body.hud-collapsed, :fullscreen, :-webkit-full-screen { --hud-h: 0px; }
+  body.hud-collapsed #game-ui { display: none !important; }
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
@@ -47,10 +50,10 @@
   #canvas {
     position: fixed;
     left: 50%;
-    top: 50%;
+    top: calc(var(--hud-h) + (100vh - var(--hud-h)) / 2);
     transform: translate(-50%, -50%);
-    width: min(100vw, calc(100vh * 4 / 3));
-    height: min(100vh, calc(100vw * 3 / 4));
+    width: min(100vw, calc((100vh - var(--hud-h)) * 4 / 3));
+    height: min(calc(100vh - var(--hud-h)), calc(100vw * 3 / 4));
     display: block;
     background: #000;
     outline: none;
@@ -63,6 +66,19 @@
     pointer-events: none;
     image-rendering: pixelated;
     z-index: 2;
+  }
+  #screen.smooth { image-rendering: auto; }
+  #screen.crt { filter: contrast(1.06) saturate(1.08); }
+  #crt-scanlines {
+    position: fixed;
+    pointer-events: none;
+    z-index: 3;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.22) 3px
+    );
   }
   canvas[hidden] { display: none !important; }
 
@@ -226,28 +242,48 @@
     text-align: left;
   }
 
-  /* --- Floating In-Game Top-Right HUD (#game-ui) --- */
+  /* --- Docked In-Game Top HUD Bar (#game-ui) --- */
   #game-ui {
     position: fixed;
-    top: 10px;
-    right: 10px;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--hud-h);
     z-index: 20;
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    background: rgba(14, 15, 19, 0.82);
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 12px;
+    background: rgba(14, 15, 19, 0.94);
     backdrop-filter: blur(8px);
-    border: 1px solid rgba(212, 173, 83, 0.32);
+    border-bottom: 1px solid rgba(212, 173, 83, 0.32);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  }
+  .hud-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .hud-brand {
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+    color: var(--accent-bright);
+    padding-right: 4px;
+    user-select: none;
+  }
+  .hud-pill {
+    font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+    color: #d6cfbd;
+    background: rgba(212, 173, 83, 0.12);
+    border: 1px solid rgba(212, 173, 83, 0.28);
     border-radius: 999px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
-    opacity: 0.82;
-    transition: opacity 0.2s ease, border-color 0.2s ease;
+    padding: 3px 8px;
+    user-select: none;
   }
-  #game-ui:hover {
-    opacity: 1;
-    border-color: var(--accent);
-  }
+  .hud-pill:empty { display: none; }
   .hud-metric {
     font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
     color: #b8b5ad;
@@ -255,6 +291,28 @@
     user-select: none;
   }
   .hud-metric:empty { display: none; }
+  #volume-slider {
+    width: 68px;
+    height: 4px;
+    padding: 0;
+    margin: 0 2px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  #hud-restore-btn {
+    position: fixed;
+    top: 6px;
+    left: 6px;
+    z-index: 21;
+    padding: 3px 9px;
+    font-size: 11px;
+    border-radius: 999px;
+    background: rgba(14, 15, 19, 0.78);
+    border: 1px solid rgba(212, 173, 83, 0.38);
+    color: var(--accent-bright);
+    opacity: 0.78;
+  }
+  #hud-restore-btn:hover { opacity: 1; border-color: var(--accent); }
   #game-ui button {
     margin: 0;
     padding: 4px 10px;
@@ -372,10 +430,33 @@
   #status.err { color: var(--err); border-color: rgba(238, 85, 85, 0.35); }
   #status.err::before { background: var(--err); }
 
-  /* --- Host / Profile Controls --- */
+  /* --- Host / Display / Profile Controls --- */
+  select {
+    font: inherit;
+    padding: 7px 10px;
+    background: #121317;
+    color: var(--fg);
+    border: 1px solid #383a46;
+    border-radius: 6px;
+    outline: none;
+    transition: border-color 0.15s;
+    width: 100%;
+  }
+  select:focus { border-color: var(--accent); }
+  .display-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 8px;
+    align-items: end;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
   .host-bar {
     display: grid;
-    grid-template-columns: 160px 1fr auto auto;
+    grid-template-columns: 140px 1fr 140px auto auto;
     gap: 8px;
     align-items: center;
     background: var(--card);
@@ -566,6 +647,7 @@
   @media (max-width: 640px) {
     #setup { padding: 2vh 10px; }
     #setup-panel { padding: 16px; }
+    .display-bar { grid-template-columns: 1fr; }
     .host-bar { grid-template-columns: 1fr; }
     .room { flex-wrap: wrap; }
   }
@@ -605,6 +687,26 @@
         <button id="copy-invite" style="padding:4px 10px;font-size:12px">Copy Invite Link</button>
       </div>
 
+      <div class="display-bar">
+        <div class="field-group">
+          <label class="field-label" for="res-select">In-Game Resolution</label>
+          <select id="res-select">
+            <option value="800">800×600 (Classic)</option>
+            <option value="1024">1024×768 (Recommended)</option>
+            <option value="1280">1280×1024 (High)</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="scale-select">Scaling Filter</label>
+          <select id="scale-select">
+            <option value="smooth">Smooth (Anti-Aliased)</option>
+            <option value="sharp">Sharp (Pixelated)</option>
+            <option value="crt">CRT (Scanlines)</option>
+          </select>
+        </div>
+        <button id="apply-res" class="primary" hidden>Apply &amp; Restart</button>
+      </div>
+
       <div class="host-bar">
         <div class="field-group">
           <label class="field-label" for="player">Your Name</label>
@@ -613,6 +715,10 @@
         <div class="field-group">
           <label class="field-label" for="roomname">Room Name</label>
           <input id="roomname" maxlength="30" placeholder="My Conquerors Game" autocomplete="off">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="roompass">Password</label>
+          <input id="roompass" type="password" maxlength="24" placeholder="Optional password" autocomplete="off">
         </div>
         <div class="field-group" style="justify-content:flex-end">
           <span class="field-label">&nbsp;</span>
@@ -669,23 +775,34 @@
 </div>
 
 <div id="game-ui" hidden>
-  <span id="game-timer" class="hud-metric"></span>
-  <span id="fps" class="hud-metric"></span>
-  <span id="ping" class="hud-metric"></span>
-  <button id="mute-btn" title="Mute / unmute audio (Alt+M)">🔊</button>
-  <button id="online-btn" title="Open multiplayer rooms & saves"><span id="hud-online-dot"></span> <span id="hud-online-label">Online</span></button>
-  <button id="hud-help-btn" title="Keyboard shortcuts">?</button>
-  <button id="fullscreen-btn" title="Toggle fullscreen (F11)">⛶</button>
+  <div class="hud-group">
+    <span class="hud-brand">AoE2</span>
+    <span id="res-badge" class="hud-pill" title="Current display mode"></span>
+    <span id="game-timer" class="hud-metric"></span>
+    <span id="fps" class="hud-metric"></span>
+    <span id="ping" class="hud-metric"></span>
+  </div>
+  <div class="hud-group">
+    <button id="mute-btn" title="Mute / unmute audio (Alt+M)">🔊</button>
+    <input id="volume-slider" type="range" min="0" max="100" value="80" title="Master volume" aria-label="Master volume">
+    <button id="scale-btn" title="Cycle scaling filter (Smooth / Sharp / CRT)">Smooth</button>
+    <button id="online-btn" title="Open multiplayer rooms &amp; saves"><span id="hud-online-dot"></span> <span id="hud-online-label">Online</span></button>
+    <button id="hud-help-btn" title="Keyboard shortcuts">?</button>
+    <button id="fullscreen-btn" title="Toggle fullscreen (F11)">⛶</button>
+    <button id="hud-collapse-btn" title="Hide top bar">▴</button>
+  </div>
 </div>
+<button id="hud-restore-btn" hidden title="Show top bar">▾ HUD</button>
 
 <div id="help-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="help-title">
   <div id="help-box">
-    <h3 id="help-title">Keyboard Shortcuts & Controls</h3>
+    <h3 id="help-title">Keyboard Shortcuts &amp; Controls</h3>
     <dl>
+      <dt>F3 / F4</dt><dd>Pause game / toggle Scoreboard (in-game)</dd>
+      <dt>F10 / Esc</dt><dd>In-game menu / close lobby overlay / skip intro</dd>
       <dt>F11 / Alt+Enter</dt><dd>Toggle fullscreen mode</dd>
-      <dt>F12</dt><dd>Cycle scaling filter (sharp / smooth / CRT / nearest / integer)</dd>
+      <dt>F12</dt><dd>Cycle scaling filter (Smooth / Sharp / CRT)</dd>
       <dt>Alt+M</dt><dd>Mute / unmute game audio</dd>
-      <dt>Esc</dt><dd>Close lobby overlay / skip intro video / in-game menu</dd>
       <dt>H / .</dt><dd>Select Town Center / cycle Idle Villager (in-game)</dd>
       <dt>Enter</dt><dd>In-game multiplayer chat</dd>
     </dl>
@@ -696,6 +813,7 @@
 
 <canvas id="canvas" tabindex="0" hidden></canvas>
 <canvas id="screen" hidden></canvas>
+<div id="crt-scanlines" hidden></div>
 <script src="page.js"></script>
 </body>
 </html>

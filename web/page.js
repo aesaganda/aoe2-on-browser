@@ -540,13 +540,13 @@ function initWebGL(canvas) {
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
-  let curW = 0, curH = 0, scratch = null;
-  return (src, w, h) => {
+  let curW = 0, curH = 0, curSmooth = null, scratch = null;
+  return (src, w, h, smooth) => {
     if (curW !== w || curH !== h) {
       canvas.width = w; canvas.height = h;
       gl.viewport(0, 0, w, h);
@@ -554,48 +554,119 @@ function initWebGL(canvas) {
       scratch = new Uint16Array(w * h);
       curW = w; curH = h;
     }
+    const wantSmooth = Boolean(smooth);
+    if (curSmooth !== wantSmooth) {
+      const filt = wantSmooth ? gl.LINEAR : gl.NEAREST;
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+      curSmooth = wantSmooth;
+    }
     scratch.set(src);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RGB, gl.UNSIGNED_SHORT_5_6_5, scratch);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   };
 }
 
+const VALID_RES = ['800', '1024', '1280'];
+let selectedRes = (() => {
+  try {
+    const v = localStorage.getItem('aoe2.res');
+    return VALID_RES.includes(v) ? v : '1024';
+  } catch { return '1024'; }
+})();
+let launchedRes = selectedRes;
+if ($('res-select')) $('res-select').value = selectedRes;
+
+const SCALE_MODES = ['smooth', 'sharp', 'crt'];
+const SCALE_LABELS = { smooth: 'Smooth', sharp: 'Sharp', crt: 'CRT' };
+let scaleMode = (() => {
+  try {
+    const v = localStorage.getItem('aoe2.scale');
+    return SCALE_MODES.includes(v) ? v : 'smooth';
+  } catch { return 'smooth'; }
+})();
+
+function applyScaleMode(nextMode, showToast) {
+  scaleMode = SCALE_MODES.includes(nextMode) ? nextMode : 'smooth';
+  try { localStorage.setItem('aoe2.scale', scaleMode); } catch {}
+  const scr = $('screen'), scan = $('crt-scanlines');
+  if (scr) {
+    scr.classList.toggle('smooth', scaleMode === 'smooth');
+    scr.classList.toggle('crt', scaleMode === 'crt');
+  }
+  if (scan) scan.hidden = (scaleMode !== 'crt') || !scr || scr.hidden;
+  if ($('scale-select')) $('scale-select').value = scaleMode;
+  if ($('scale-btn')) $('scale-btn').textContent = SCALE_LABELS[scaleMode] || 'Smooth';
+  if (showToast) toast(`Scaling: ${SCALE_LABELS[scaleMode] || scaleMode}`, 1400);
+}
+applyScaleMode(scaleMode, false);
+
+let hudUserCollapsed = false;
+function getHudHeight() {
+  const ui = $('game-ui');
+  if (!ui || ui.hidden || document.body.classList.contains('hud-collapsed') || document.fullscreenElement) return 0;
+  return Math.round(ui.getBoundingClientRect().height || 36);
+}
+
 let lastBox = null;
 function syncScreenRect() {
-  const sdl = $('canvas'), scr = $('screen');
+  const sdl = $('canvas'), scr = $('screen'), scan = $('crt-scanlines');
   if (!lastBox || !sdl || !scr) return;
   const { dx, dy, dw, dh, cw, ch } = lastBox;
   if (cw <= 0 || ch <= 0) return;
   let r = sdl.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) {
-    const vw = window.innerWidth, vh = window.innerHeight;
+    const topOff = getHudHeight();
+    const vw = window.innerWidth, vh = Math.max(100, window.innerHeight - topOff);
     const w = Math.min(vw, (vh * 4) / 3);
     const h = Math.min(vh, (vw * 3) / 4);
-    r = { left: (vw - w) / 2, top: (vh - h) / 2, width: w, height: h };
+    r = { left: (vw - w) / 2, top: topOff + (vh - h) / 2, width: w, height: h };
   }
   const sx = r.width / cw, sy = r.height / ch;
-  Object.assign(scr.style, {
+  const box = {
     left: `${r.left + dx * sx}px`,
     top: `${r.top + dy * sy}px`,
     width: `${dw * sx}px`,
     height: `${dh * sy}px`,
-  });
+  };
+  Object.assign(scr.style, box);
+  if (scan) Object.assign(scan.style, box);
+}
+function setHudCollapsed(collapsed) {
+  hudUserCollapsed = Boolean(collapsed);
+  document.body.classList.toggle('hud-collapsed', hudUserCollapsed);
+  if ($('hud-restore-btn')) {
+    $('hud-restore-btn').hidden = !hudUserCollapsed || !gameRunning || Boolean(document.fullscreenElement);
+  }
+  syncScreenRect();
+  requestAnimationFrame(syncScreenRect);
 }
 window.addEventListener('resize', syncScreenRect);
-document.addEventListener('fullscreenchange', syncScreenRect);
+document.addEventListener('fullscreenchange', () => {
+  if ($('hud-restore-btn')) {
+    $('hud-restore-btn').hidden = !hudUserCollapsed || !gameRunning || Boolean(document.fullscreenElement);
+  }
+  syncScreenRect();
+  requestAnimationFrame(syncScreenRect);
+});
 
 function presenter(module) {
-  const sdl = $('canvas'), scr = $('screen');
+  const sdl = $('canvas'), scr = $('screen'), scan = $('crt-scanlines');
   const glDraw = initWebGL(scr);
   const ctx = glDraw ? null : scr.getContext('2d');
-  let img = null, firstFrame = true;
+  let img = null, firstFrame = true, lastFrameW = 0, lastFrameH = 0, lastSdlMode = null;
   return {
     ra2Present(fb, w, h, dx, dy, dw, dh, mode, cw, ch) {
       if (document.hidden && !firstFrame) return;
       if (sdl.hidden) sdl.hidden = false;
+      if (lastSdlMode !== null && mode !== lastSdlMode) {
+        const mapped = mode === 2 ? 'crt' : (mode >= 3 ? 'sharp' : 'smooth');
+        applyScaleMode(mapped, true);
+      }
+      lastSdlMode = mode;
       const src = module.HEAPU16.subarray(fb >> 1, (fb >> 1) + w * h);
       if (glDraw) {
-        glDraw(src, w, h);
+        glDraw(src, w, h, scaleMode === 'smooth');
       } else {
         if (!img || img.width !== w || img.height !== h) { scr.width = w; scr.height = h; img = ctx.createImageData(w, h); }
         const out = new Uint32Array(img.data.buffer);
@@ -605,19 +676,39 @@ function presenter(module) {
         }
         ctx.putImageData(img, 0, 0);
       }
+      if (lastFrameW !== w || lastFrameH !== h) {
+        lastFrameW = w;
+        lastFrameH = h;
+        if ($('res-badge')) $('res-badge').textContent = `${w}×${h}`;
+        // AoE2 always uses 800x600 on menus and 640x480 on videos; only sync high-res match modes.
+        if (w === 1024 || w === 1280) {
+          launchedRes = String(w);
+          selectedRes = launchedRes;
+          try { localStorage.setItem('aoe2.res', launchedRes); } catch {}
+          if ($('res-select')) $('res-select').value = launchedRes;
+          if ($('apply-res')) $('apply-res').hidden = true;
+        }
+      }
       lastBox = { dx, dy, dw, dh, cw, ch };
       syncScreenRect();
       scr.hidden = false;
+      if (scan) scan.hidden = (scaleMode !== 'crt');
       tickFps();
       if (firstFrame) {
         $('loading').hidden = true;
         $('game-ui').hidden = false;
+        if ($('hud-restore-btn')) $('hud-restore-btn').hidden = !hudUserCollapsed || Boolean(document.fullscreenElement);
+        syncScreenRect();
+        requestAnimationFrame(syncScreenRect);
         fpsLast = performance.now();
         firstFrame = false;
         if ($('setup').hidden) sdl.focus();
       }
     },
-    ra2Menu(open) { scr.hidden = !!open; },
+    ra2Menu(open) {
+      scr.hidden = !!open;
+      if (scan) scan.hidden = !!open || (scaleMode !== 'crt');
+    },
   };
 }
 
@@ -650,6 +741,42 @@ function resumeAudioContexts() {
 for (const evt of ['click', 'keydown', 'touchstart']) {
   document.addEventListener(evt, resumeAudioContexts, { capture: true, passive: true });
 }
+let muted = false;
+let masterVolume = (() => {
+  try {
+    const v = parseFloat(localStorage.getItem('aoe2.volume'));
+    return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.8;
+  } catch { return 0.8; }
+})();
+if ($('volume-slider')) $('volume-slider').value = String(Math.round(masterVolume * 100));
+
+function applyAudioGain() {
+  const all = [];
+  if (Array.isArray(window._audioContexts)) all.push(...window._audioContexts);
+  if (typeof SDL === 'object' && SDL.audioContext && !all.includes(SDL.audioContext)) all.push(SDL.audioContext);
+  const effectiveMuted = muted || masterVolume <= 0;
+  for (const ctx of all) {
+    if (ctx._masterGain) {
+      ctx._masterGain.gain.value = muted ? 0 : masterVolume;
+    } else {
+      if (effectiveMuted) ctx.suspend().catch(() => {});
+      else ctx.resume().catch(() => {});
+    }
+    if (!effectiveMuted && ctx.state === 'suspended') ctx.resume().catch(() => {});
+  }
+  if ($('mute-btn')) {
+    $('mute-btn').textContent = effectiveMuted ? '🔇' : '🔊';
+    $('mute-btn').title = effectiveMuted ? 'Unmute audio (Alt+M)' : 'Mute audio (Alt+M)';
+  }
+}
+
+function setVolume(val) {
+  masterVolume = Math.min(1, Math.max(0, Number(val) || 0));
+  if (masterVolume > 0 && muted) muted = false;
+  try { localStorage.setItem('aoe2.volume', String(masterVolume)); } catch {}
+  applyAudioGain();
+}
+
 const OrigAudioContext = window.AudioContext || window.webkitAudioContext;
 if (OrigAudioContext) {
   window._audioContexts = [];
@@ -659,7 +786,7 @@ if (OrigAudioContext) {
     try {
       const realDest = ctx.destination;
       const master = ctx.createGain();
-      master.gain.value = muted ? 0 : 1;
+      master.gain.value = muted ? 0 : masterVolume;
       master.connect(realDest);
       ctx._realDestination = realDest;
       ctx._masterGain = master;
@@ -673,23 +800,14 @@ if (OrigAudioContext) {
 }
 
 // --- Mute ---
-let muted = false;
 function toggleMute() {
   muted = !muted;
-  const all = [];
-  if (Array.isArray(window._audioContexts)) all.push(...window._audioContexts);
-  if (typeof SDL === 'object' && SDL.audioContext && !all.includes(SDL.audioContext)) all.push(SDL.audioContext);
-  for (const ctx of all) {
-    if (ctx._masterGain) {
-      ctx._masterGain.gain.value = muted ? 0 : 1;
-    } else {
-      if (muted) ctx.suspend().catch(() => {});
-      else ctx.resume().catch(() => {});
-    }
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  if (!muted && masterVolume <= 0) {
+    masterVolume = 0.8;
+    if ($('volume-slider')) $('volume-slider').value = '80';
+    try { localStorage.setItem('aoe2.volume', String(masterVolume)); } catch {}
   }
-  $('mute-btn').textContent = muted ? '🔇' : '🔊';
-  $('mute-btn').title = muted ? 'Unmute audio (Alt+M)' : 'Mute audio (Alt+M)';
+  applyAudioGain();
   toast(muted ? 'Audio muted' : 'Audio unmuted', 1500);
 }
 
@@ -921,7 +1039,15 @@ async function listRooms() {
     b.textContent = 'Join';
     b.style.padding = '5px 12px';
     b.disabled = !r.open || r.players.length >= maxPlayers || $('play').hidden;
-    b.onclick = () => play({ lobby: 'join:' + r.id, room: r.name });
+    b.onclick = () => {
+      let password = '';
+      if (r.password) {
+        const entered = window.prompt(`Enter password for "${r.name}":`);
+        if (entered === null) return;
+        password = entered;
+      }
+      play({ lobby: 'join:' + r.id, room: r.name, password });
+    };
 
     const link = document.createElement('button');
     link.textContent = 'Copy Link';
@@ -1144,10 +1270,14 @@ function returnToLobby(msg) {
   releaseWakeLock();
   stopGameTimer();
   updateVisibilityWarning();
+  setHudCollapsed(false);
   $('loading').hidden = true;
   $('game-ui').hidden = true;
   $('canvas').hidden = true;
   $('screen').hidden = true;
+  if ($('crt-scanlines')) $('crt-scanlines').hidden = true;
+  if ($('res-badge')) $('res-badge').textContent = '';
+  if ($('apply-res')) $('apply-res').hidden = true;
   $('fps').textContent = '';
   $('saves-list').hidden = true;
   $('play').textContent = 'Play';
@@ -1164,6 +1294,10 @@ async function play(launch) {
       closeOnline();
       return;
     }
+    try {
+      if (launch.password) sessionStorage.setItem('aoe2.pendingPass', launch.password);
+      else sessionStorage.removeItem('aoe2.pendingPass');
+    } catch {}
     const u = new URL(location.href);
     if (launch.lobby === 'host') {
       u.search = `?host=1&room=${encodeURIComponent(launch.room || '')}`;
@@ -1175,6 +1309,8 @@ async function play(launch) {
     location.href = u.toString();
     return;
   }
+  launchedRes = selectedRes;
+  if ($('apply-res')) $('apply-res').hidden = true;
   if (!crossOriginIsolated) { returnToLobby('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
   const exe = await copiedExe().catch(() => null);
   const problem = exe ? await exeProblem(exe) : 'The browser cache has no age2_x1\\age2_x1.exe.';
@@ -1275,12 +1411,14 @@ async function play(launch) {
     },
     preRun: [(m) => {
       m.ENV.AOE2_ACCEPT_EULA = '1';
+      m.ENV.AOE2_RESOLUTION = launchedRes;
       if (debugTrace) m.ENV.AOE2_TRACE_VIDEO = '1';
       if (launch && launch.lobby) {
         m.ENV.AOE2_ARGS = 'LOBBY';
         m.ENV.AOE2_LOBBY = launch.lobby;
         m.ENV.AOE2_ROOM = launch.room || '';
         m.ENV.AOE2_PLAYER = playerName();
+        if (launch.password) m.ENV.AOE2_PASSWORD = launch.password;
       }
     }],
     setStatus(text) {
@@ -1379,15 +1517,20 @@ async function init() {
   const joinId = params.get('join');
   const hostParam = params.get('host');
   const roomParam = params.get('room') || '';
+  let pendingPass = '';
+  try {
+    pendingPass = sessionStorage.getItem('aoe2.pendingPass') || '';
+    sessionStorage.removeItem('aoe2.pendingPass');
+  } catch {}
   let launch;
   if (joinId) {
     history.replaceState(null, '', location.pathname);
-    launch = { lobby: 'join:' + joinId, room: roomParam };
+    launch = { lobby: 'join:' + joinId, room: roomParam, password: pendingPass };
     log('Joining game from invite link…');
   } else if (hostParam) {
     history.replaceState(null, '', location.pathname);
     const room = (roomParam || `${playerName()}'s game`).slice(0, 30);
-    launch = { lobby: 'host', room };
+    launch = { lobby: 'host', room, password: pendingPass };
     hostedRoom = room;
     knownPlayers = new Set([playerName()]);
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
@@ -1433,11 +1576,34 @@ $('online-btn').onclick = () => { if ($('setup').hidden) openOnline(); else clos
 $('play').onclick = () => { if (gameRunning) closeOnline(); else play(); };
 $('host').onclick = () => {
   const room = ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30);
+  const password = $('roompass') ? $('roompass').value.trim() : '';
+  if ($('roompass')) $('roompass').value = '';
   hostedRoom = room;
   knownPlayers = new Set([playerName()]);
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
-  play({ lobby: 'host', room });
+  play({ lobby: 'host', room, password });
 };
+if ($('res-select')) {
+  $('res-select').onchange = () => {
+    const val = $('res-select').value;
+    selectedRes = VALID_RES.includes(val) ? val : '1024';
+    try { localStorage.setItem('aoe2.res', selectedRes); } catch {}
+    if ($('apply-res')) $('apply-res').hidden = !gameRunning || (selectedRes === launchedRes);
+  };
+}
+if ($('apply-res')) $('apply-res').onclick = () => location.reload();
+if ($('scale-select')) $('scale-select').onchange = () => applyScaleMode($('scale-select').value, true);
+if ($('scale-btn')) {
+  $('scale-btn').onclick = () => {
+    const next = SCALE_MODES[(SCALE_MODES.indexOf(scaleMode) + 1) % SCALE_MODES.length];
+    applyScaleMode(next, true);
+  };
+}
+if ($('volume-slider')) {
+  $('volume-slider').oninput = () => setVolume(Number($('volume-slider').value) / 100);
+}
+if ($('hud-collapse-btn')) $('hud-collapse-btn').onclick = () => setHudCollapsed(true);
+if ($('hud-restore-btn')) $('hud-restore-btn').onclick = () => setHudCollapsed(false);
 $('refresh-rooms').onclick = () => { listRooms(); };
 $('copy-invite').onclick = async () => {
   const u = $('invite-url').textContent;
@@ -1517,7 +1683,11 @@ window.addEventListener('keydown', (e) => {
   }
   // In-game shortcuts (when overlays are hidden)
   const tag = e.target?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (!e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'F1' || e.key === 'F2' || e.key === 'F3' || e.key === 'F4' || e.key === 'F10')) {
+    e.preventDefault();
+    return;
+  }
   if (e.key === 'F11') {
     e.preventDefault();
     toggleFullscreen();

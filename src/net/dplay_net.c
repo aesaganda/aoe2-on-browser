@@ -758,6 +758,7 @@ static int lobby_mode(uint8_t inst[16]) {               /* 2 host, 1 join, 0 not
 }
 static const char *lobby_player(void) { const char *p = getenv("AOE2_PLAYER"); return p && *p ? p : "Player"; }
 static const char *lobby_room(void) { const char *r = getenv("AOE2_ROOM"); return r && *r ? r : "Online game"; }
+static const char *lobby_password(void) { const char *p = getenv("AOE2_PASSWORD"); return p ? p : ""; }
 static uint8_t g_lobby_set[80];                         /* the game's SetConnectionSettings desc */
 static int g_lobby_set_valid;
 static void lobby_desc(uint8_t d[80], const uint8_t inst[16]) {
@@ -810,7 +811,7 @@ uint32_t dplay_net_lobby_connect(uint32_t *out) {
     int mode = lobby_mode(inst);
     if (!mode) return 0x8877042Eu;
     lobby_desc(d, mode == 1 ? inst : NULL);
-    uint32_t hr = open_session(d, lobby_room(), "", mode == 2 ? DPOPEN_CREATE : DPOPEN_JOIN);
+    uint32_t hr = open_session(d, lobby_room(), lobby_password(), mode == 2 ? DPOPEN_CREATE : DPOPEN_JOIN);
     if (hr == DP_OK) *out = new_pair();
     return hr;
 }
