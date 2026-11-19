@@ -192,16 +192,19 @@ class Relay:
                 if r:
                     log.info("cleaned up stale room %r (empty for %ds)", r.name, int(now - r.last_active))
 
+    async def _send_quiet(self, c, frame):
+        try:
+            await c.send(frame)
+        except (ConnectionError, asyncio.CancelledError, websockets.ConnectionClosed):
+            pass
+
     async def reply(self, c, req, hr, body=b""):
         await c.send(struct.pack("<BIII", REPLY, 0, req, hr) + body)
 
     async def to_room(self, room, frame, but=None):
         for c in list(room.conns):
             if c is not but:
-                try:
-                    await c.send(frame)
-                except (ConnectionError, asyncio.CancelledError):
-                    pass
+                await self._send_quiet(c, frame)
 
     async def handle(self, c, frame):
         if len(frame) < 5:
@@ -274,10 +277,7 @@ class Relay:
             else:
                 targets = [room.players[dst]] if dst in room.players else []
             for p in targets:
-                try:
-                    await p.conn.send(struct.pack("<BIII", MSG, 0, src, p.id) + blob(data))
-                except (ConnectionError, asyncio.CancelledError):
-                    pass
+                await self._send_quiet(p.conn, struct.pack("<BIII", MSG, 0, src, p.id) + blob(data))
             return
         if t == SETDESC:
             if c is not room.host:
@@ -319,7 +319,7 @@ class Relay:
         if room.host is c:
             if room.conns:
                 room.host = next(iter(room.conns))
-                await room.host.send(struct.pack("<BI", SYS_HOST, 0))
+                await self._send_quiet(room.host, struct.pack("<BI", SYS_HOST, 0))
             else:
                 self.rooms.pop(room.instance, None)
                 log.info("room %r closed", room.name)

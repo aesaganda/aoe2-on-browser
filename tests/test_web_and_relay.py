@@ -513,6 +513,62 @@ class TestRelay(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(rooms[0]["open"])
             self.assertFalse(rooms[0]["password"])
 
+    async def test_disconnect_during_broadcast_handles_connection_closed(self):
+        r = relay.Relay(max_rooms=5)
+        closed_err = websockets.exceptions.ConnectionClosedOK(None, None)
+
+        peer_closing = False
+
+        async def ok_send(_frame):
+            return None
+
+        async def peer_send(_frame):
+            if peer_closing:
+                raise closed_err
+            return None
+
+        host_conn = relay.Conn(ok_send, "127.0.0.1")
+        peer_conn = relay.Conn(peer_send, "127.0.0.1")
+
+        app_guid = bytes(range(16))
+        desc = bytearray(80)
+        struct.pack_into("<II", desc, 0, 80, 0)
+        desc[24:40] = app_guid
+        struct.pack_into("<I", desc, 40, 4)
+
+        await r.handle(host_conn, struct.pack("<BI", relay.CREATE, 1) + bytes(desc) + relay.s(b"DropRoom") + relay.s(b""))
+        room = next(iter(r.rooms.values()))
+
+        await r.handle(peer_conn, struct.pack("<BI", relay.JOIN, 2) + room.instance + relay.s(b""))
+        await r.handle(
+            host_conn,
+            struct.pack("<BII", relay.NEWPLAYER, 3, 0) + relay.s(b"Host") + relay.s(b"Host") + relay.blob(b""),
+        )
+        await r.handle(
+            peer_conn,
+            struct.pack("<BII", relay.NEWPLAYER, 4, 0) + relay.s(b"Peer") + relay.s(b"Peer") + relay.blob(b""),
+        )
+        host_player = next(p for p in room.players.values() if p.conn is host_conn)
+        peer_player = next(p for p in room.players.values() if p.conn is peer_conn)
+
+        # Simulate peer WebSocket closing concurrently while host sends and leaves.
+        peer_closing = True
+
+        # DirectPlay SEND to a closed WebSocket peer must not raise ConnectionClosedOK.
+        await r.handle(
+            host_conn,
+            struct.pack("<BIIII", relay.SEND, 5, host_player.id, peer_player.id, 0) + relay.blob(b"ping"),
+        )
+
+        # to_room broadcast (host leaving triggers SYS_DELPLAYER + SYS_HOST to closed peer_conn) must not raise.
+        await r.leave(host_conn)
+        self.assertIs(room.host, peer_conn)
+        self.assertNotIn(host_player.id, room.players)
+
+        # Last peer leaving closes the room cleanly.
+        await r.leave(peer_conn)
+        self.assertEqual(len(r.rooms), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
