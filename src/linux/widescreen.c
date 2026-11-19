@@ -279,17 +279,61 @@ static void ws_reflow_widgets(uint32_t self, int baseW, int baseH, int W, int H)
         ws_set_fixed(map, 0, topY, W, H - (topY + botH));
     }
 
-    /* Reflow stacked scoreboard rows (0x11C8[14..0]) bottom-up so every row above row 14 follows map's new right/bottom */
-    for (int i = 14; i >= 0; i--) {
-        ws_call_panel_size(MEM32(self + 0x11C8u + (uint32_t)i * 4u), W, H);
-    }
-    /* Reflow top-right clock, status stack, and center banner overlays */
-    static const uint32_t overlay_offs[] = {
-        0x11C0u, 0x114Cu, 0x1150u, 0x113Cu,
-        0x1178u, 0x117Cu, 0x1180u, 0x1184u, 0x1188u, 0x118Cu
+    /*
+     * TPanel::handle_size (0x004A7950) only honors ref_left/top/right/bottom
+     * (+0x44..+0x50) when the referenced sibling panel has +0x6C (active) != 0.
+     * sub_004E2840 temporarily forces +0x6C = 1 while positioning stacked
+     * widgets and restores it before returning, so do the same here while
+     * reflowing them bottom-up / in dependency order.
+     */
+    static const uint32_t stacked_offs[11] = {
+        0x113Cu, 0x1144u, 0x1178u, 0x117Cu, 0x1180u, 0x1184u,
+        0x1188u, 0x118Cu, 0x120Cu, 0x1210u, 0x1214u
     };
-    for (size_t i = 0; i < sizeof(overlay_offs) / sizeof(overlay_offs[0]); i++) {
-        ws_call_panel_size(MEM32(self + overlay_offs[i]), W, H);
+    uint32_t score_rows[15];
+    uint32_t score_active[15];
+    uint32_t stacked_panels[11];
+    uint32_t stacked_active[11];
+
+    for (int i = 0; i < 15; i++) {
+        score_rows[i] = MEM32(self + 0x11C8u + (uint32_t)i * 4u);
+        score_active[i] = score_rows[i] ? MEM32(score_rows[i] + 0x6Cu) : 0u;
+        if (score_rows[i]) MEM32(score_rows[i] + 0x6Cu) = 1u;
+    }
+    for (int i = 0; i < 11; i++) {
+        stacked_panels[i] = MEM32(self + stacked_offs[i]);
+        stacked_active[i] = stacked_panels[i] ? MEM32(stacked_panels[i] + 0x6Cu) : 0u;
+        if (stacked_panels[i]) MEM32(stacked_panels[i] + 0x6Cu) = 1u;
+    }
+
+    /* Scoreboard rows (0x11C8[14..0]) chain upward via ref_bottom = row[i+1]. */
+    for (int i = 14; i >= 0; i--) {
+        ws_call_panel_size(score_rows[i], W, H);
+    }
+
+    ws_call_panel_size(MEM32(self + 0x11C0u), W, H);
+    ws_call_panel_size(MEM32(self + 0x114Cu), W, H);
+    for (int i = 0; i < 10; i++) {
+        ws_call_panel_size(MEM32(self + 0x1150u + (uint32_t)i * 4u), W, H);
+    }
+    for (int i = 0; i < 11; i++) {
+        ws_call_panel_size(stacked_panels[i], W, H);
+    }
+
+    uint32_t center_banner = MEM32(self + 0x1148u);
+    if (center_banner) {
+        int m = (W - 500) / 2;
+        if (m < 0) m = 0;
+        MEM32(center_banner + 0xA0u) = (uint32_t)m;
+        MEM32(center_banner + 0xA8u) = (uint32_t)m;
+        ws_call_panel_size(center_banner, W, H);
+    }
+
+    for (int i = 0; i < 11; i++) {
+        if (stacked_panels[i]) MEM32(stacked_panels[i] + 0x6Cu) = stacked_active[i];
+    }
+    for (int i = 0; i < 15; i++) {
+        if (score_rows[i]) MEM32(score_rows[i] + 0x6Cu) = score_active[i];
     }
 
     if (baseW == 1024) {

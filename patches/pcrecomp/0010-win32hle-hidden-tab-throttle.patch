@@ -1,0 +1,61 @@
+--- a/runtime/win32hle/win32hle.h	2026-11-19 15:19:44.816214668 +0300
++++ b/runtime/win32hle/win32hle.h	2026-11-19 15:19:44.843503595 +0300
+@@ -388,6 +388,7 @@
+ extern void (*hle_screen_settings_hook)(const char *scale, int bars, int fullscreen);   /* F11/F12 changed them */
+ void hle_screen_fullscreen(int on);        /* as F11 does, the settings hook told */
+ void hle_screen_confine(int on);           /* hold the mouse in the picture while focused (default on) */
++void hle_screen_set_hidden(int hidden);    /* browser tab hidden: skip RGB565 present & pace lightly */
+ const char *hle_screen_settings(int *bars, int *fullscreen);   /* the scaling now; bars and fullscreen if asked */
+ /* A popup menu over the picture, the kind the Windows presenter opens on F10:
+  * at the mouse, a submenu beside its item, the arrow keys, Enter and a click
+--- a/runtime/win32hle/screen.c	2026-11-19 15:19:44.818304777 +0300
++++ b/runtime/win32hle/screen.c	2026-11-19 15:19:44.843902520 +0300
+@@ -277,6 +277,12 @@
+     last_call = now;
+     g_pace_k = k, g_pace_hz = hz;
+ }
++static volatile int g_hidden;
++static int g_web_presented_once;
++void hle_screen_set_hidden(int hidden) {
++    g_hidden = hidden != 0;
++    if (!g_hidden) g_shown_seq = ~0u;
++}
+ /* flip: the game flipped, and this frame is shown, paced (pace). */
+ static void present(int flip) {
+     const uint8_t *px;
+@@ -304,6 +310,7 @@
+      * An 8 bpp game's frame goes the same way, through its palette; true-colour
+      * content over it (hle_screen_rgb_hook) is composed in XRGB first. */
+     if (bpp == 16 || bpp == 8) {
++        if (g_hidden && g_web_presented_once) return;
+         int ww, wh;
+         if (g_win && w > 0 && h > 0) {
+             static int last_win_w, last_win_h;
+@@ -370,6 +377,7 @@
+             }
+             if (dst) {
+                 web_menu(0);
++                g_web_presented_once = 1;
+                 web_present(dst, w, h, g_dst.x, g_dst.y, g_dst.w, g_dst.h, g_mode, ww, wh);
+             }
+             return;
+@@ -982,6 +990,19 @@
+     if (hle_screen_poll_hook) hle_screen_poll_hook();
+     present(0);
+     confine_update();
++#ifdef __EMSCRIPTEN__
++    if (g_hidden && g_web_presented_once) {
++        static uint32_t g_hidden_sleep_ms;
++        uint32_t now = hle_ticks_ms();
++        if (now - g_hidden_sleep_ms >= 30) {
++            g_hidden_sleep_ms = now;
++            struct timespec ts = { 0, 20000000L };
++            hle_block_begin();
++            nanosleep(&ts, NULL);
++            hle_block_end();
++        }
++    }
++#endif
+ }
+ 
+ static void present_gdi(void) { present(0); }

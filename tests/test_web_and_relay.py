@@ -574,6 +574,128 @@ class TestRelay(unittest.IsolatedAsyncioTestCase):
         await r.leave(peer_conn)
         self.assertEqual(len(r.rooms), 0)
 
+    async def test_leave_frame_removes_player_and_closes_empty_room(self):
+        url = f"ws://127.0.0.1:{self.port}/relay"
+        app_guid = bytes(range(16))
+        desc = bytearray(80)
+        struct.pack_into("<II", desc, 0, 80, 0)
+        desc[24:40] = app_guid
+        struct.pack_into("<I", desc, 40, 4)
+
+        async with websockets.connect(url) as host_ws, websockets.connect(url) as join_ws:
+            await host_ws.send(struct.pack("<BI", relay.HELLO, 1) + relay.s(b"Host"))
+            await host_ws.recv()
+            await host_ws.send(struct.pack("<BI", relay.CREATE, 2) + bytes(desc) + relay.s(b"LeaveRoom") + relay.s(b""))
+            cframe = await host_ws.recv()
+            inst = cframe[13 + 8 : 13 + 24]
+            await host_ws.send(struct.pack("<BII", relay.NEWPLAYER, 3, 0) + relay.s(b"Host") + relay.s(b"Host") + relay.blob(b""))
+            await host_ws.recv()
+
+            await join_ws.send(struct.pack("<BI", relay.HELLO, 1) + relay.s(b"Join"))
+            await join_ws.recv()
+            await join_ws.send(struct.pack("<BI", relay.JOIN, 2) + inst + relay.s(b""))
+            await join_ws.recv()
+            await join_ws.send(struct.pack("<BII", relay.NEWPLAYER, 3, 0) + relay.s(b"Join") + relay.s(b"Join") + relay.blob(b""))
+            await join_ws.recv()
+            await host_ws.recv()  # SYS_NEWPLAYER
+
+            st, _, b = await asyncio.to_thread(_http_get, "127.0.0.1", self.port, "/rooms")
+            self.assertEqual(st, 200)
+            self.assertEqual(json.loads(b)["rooms"][0]["players"], ["Host", "Join"])
+
+            # Joiner sends LEAVE: decrements players immediately while keeping room open for Host.
+            await join_ws.send(struct.pack("<BI", relay.LEAVE, 4))
+            lreply = await join_ws.recv()
+            self.assertEqual(struct.unpack_from("<BIII", lreply, 0), (relay.REPLY, 0, 4, relay.DP_OK))
+            await host_ws.recv()  # SYS_DELPLAYER
+
+            st, _, b = await asyncio.to_thread(_http_get, "127.0.0.1", self.port, "/rooms")
+            self.assertEqual(st, 200)
+            self.assertEqual(json.loads(b)["rooms"][0]["players"], ["Host"])
+
+            # Host sends LEAVE: room closes cleanly.
+            await host_ws.send(struct.pack("<BI", relay.LEAVE, 4))
+            hreply = await host_ws.recv()
+            self.assertEqual(struct.unpack_from("<BIII", hreply, 0), (relay.REPLY, 0, 4, relay.DP_OK))
+
+            st, _, b = await asyncio.to_thread(_http_get, "127.0.0.1", self.port, "/rooms")
+            self.assertEqual(st, 200)
+            self.assertEqual(json.loads(b)["rooms"], [])
+
+    async def test_lobby_heartbeat_keepalive_relays_in_open_room_and_stops_on_match_start(self):
+        import time
+
+        r = relay.Relay(max_rooms=5)
+        join_frames = []
+
+        async def host_send(_frame):
+            return None
+
+        async def join_send(frame):
+            join_frames.append(frame)
+
+        host_conn = relay.Conn(host_send, "127.0.0.1")
+        join_conn = relay.Conn(join_send, "127.0.0.1")
+
+        app_guid = bytes(range(16))
+        desc = bytearray(80)
+        struct.pack_into("<II", desc, 0, 80, 0)
+        desc[24:40] = app_guid
+        struct.pack_into("<I", desc, 40, 4)
+
+        await r.handle(host_conn, struct.pack("<BI", relay.CREATE, 1) + bytes(desc) + relay.s(b"HbRoom") + relay.s(b""))
+        room = next(iter(r.rooms.values()))
+        await r.handle(join_conn, struct.pack("<BI", relay.JOIN, 2) + room.instance + relay.s(b""))
+        await r.handle(host_conn, struct.pack("<BII", relay.NEWPLAYER, 3, 0) + relay.s(b"Host") + relay.s(b"Host") + relay.blob(b""))
+        await r.handle(join_conn, struct.pack("<BII", relay.NEWPLAYER, 4, 0) + relay.s(b"Join") + relay.s(b"Join") + relay.blob(b""))
+
+        host_player = next(p for p in room.players.values() if p.conn is host_conn)
+        hb_payload = b"\x35\x30\xad\xde" + b"\x00" * 12
+        join_frames.clear()
+
+        await r.handle(host_conn, struct.pack("<BIIII", relay.SEND, 5, host_player.id, 0, 0) + relay.blob(hb_payload))
+        msg_frames = [f for f in join_frames if f and f[0] == relay.MSG]
+        self.assertEqual(len(msg_frames), 1)
+        self.assertIsNotNone(host_player.last_lobby_hb)
+
+        # Before interval expires: no duplicate keepalive sent.
+        await r.relay_lobby_heartbeats_once(now=host_player.last_lobby_hb_at + 5.0)
+        msg_frames = [f for f in join_frames if f and f[0] == relay.MSG]
+        self.assertEqual(len(msg_frames), 1)
+
+        # After LOBBY_HB_RELAY_INTERVAL elapses: relay re-broadcasts cached 0x35 0x30 heartbeat.
+        await r.relay_lobby_heartbeats_once(now=host_player.last_lobby_hb_at + relay.LOBBY_HB_RELAY_INTERVAL + 1.0)
+        msg_frames = [f for f in join_frames if f and f[0] == relay.MSG]
+        self.assertEqual(len(msg_frames), 2)
+        self.assertIn(hb_payload, msg_frames[-1])
+
+        # Once match starts (SETDESC disables new players), keepalive stops cleanly.
+        closed_desc = bytearray(room.desc)
+        struct.pack_into("<I", closed_desc, 4, relay.DPSESSION_JOINDISABLED | relay.DPSESSION_NEWPLAYERSDISABLED)
+        await r.handle(host_conn, struct.pack("<BI", relay.SETDESC, 6) + bytes(closed_desc) + relay.s(b"HbRoom") + relay.s(b""))
+        self.assertIsNone(host_player.last_lobby_hb)
+
+        before_count = len([f for f in join_frames if f and f[0] == relay.MSG])
+        await r.relay_lobby_heartbeats_once(now=time.monotonic() + 120.0)
+        after_count = len([f for f in join_frames if f and f[0] == relay.MSG])
+        self.assertEqual(before_count, after_count)
+
+
+class TestWebClientContracts(unittest.TestCase):
+    def test_net_web_and_page_lifecycle_hooks(self):
+        with open(os.path.join(ROOT, "src", "web", "net_web.c"), encoding="utf-8") as f:
+            net_web = f.read()
+        with open(os.path.join(ROOT, "web", "page.js"), encoding="utf-8") as f:
+            page_js = f.read()
+        with open(os.path.join(ROOT, "patches", "pcrecomp", "0011-win32hle-rebase-monotonic-ticks.patch"), encoding="utf-8") as f:
+            tick_patch = f.read()
+        self.assertIn("Module.closeRelay", net_web)
+        self.assertIn("r.closing = true", net_web)
+        self.assertIn("activeModule?.closeRelay?.()", page_js)
+        self.assertIn("activeModule?._web_set_hidden?.(", page_js)
+        self.assertIn("g_ticks_base_ms", tick_patch)
+        self.assertIn("RET(hle_ticks_ms(), 0)", tick_patch)
+
 
 if __name__ == "__main__":
     unittest.main()

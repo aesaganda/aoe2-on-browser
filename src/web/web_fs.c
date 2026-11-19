@@ -56,6 +56,11 @@ EMSCRIPTEN_KEEPALIVE void web_fs_notify_change(void) {
     hle_path_changed();
 }
 
+/* Notify win32hle when the browser tab is hidden/visible to avoid background CPU throttling. */
+EMSCRIPTEN_KEEPALIVE void web_set_hidden(int hidden) {
+    hle_screen_set_hidden(hidden);
+}
+
 /* Enqueue relative pointer delta from Pointer Lock on the main browser thread. */
 EMSCRIPTEN_KEEPALIVE void web_input_motion(int dx, int dy) {
     if (!dx && !dy) return;

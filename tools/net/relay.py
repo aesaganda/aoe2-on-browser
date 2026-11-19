@@ -70,6 +70,7 @@ MAX_CONNS_PER_IP = 16         # per client IP simultaneous connections
 MAX_PLAYERS_PER_ROOM = 8
 MAX_ROOMS = 50
 ROOM_TTL = 7200               # seconds: empty rooms are cleaned up after this
+LOBBY_HB_RELAY_INTERVAL = 15.0  # seconds: keep open lobbies alive when a browser tab is background-frozen
 CHAT_RATE_LIMIT = 5           # max chat messages per client IP per window
 CHAT_RATE_WINDOW = 10.0       # seconds
 
@@ -119,10 +120,12 @@ def blob(v):
 
 
 class Player:
-    __slots__ = ("id", "conn", "flags", "short", "long", "data")
+    __slots__ = ("id", "conn", "flags", "short", "long", "data", "last_lobby_hb", "last_lobby_hb_at")
 
     def __init__(self, pid, conn, flags, short, long_, data):
         self.id, self.conn, self.flags, self.short, self.long, self.data = pid, conn, flags, short, long_, data
+        self.last_lobby_hb = None
+        self.last_lobby_hb_at = 0.0
 
     def pack(self):
         return struct.pack("<II", self.id, self.flags) + s(self.short) + s(self.long) + blob(self.data)
@@ -177,9 +180,11 @@ class Relay:
         self.chat_buckets = {}
         self.max_rooms = max_rooms
         self._cleanup_task = None
+        self._keepalive_task = None
 
     def start_cleanup(self):
         self._cleanup_task = asyncio.ensure_future(self._cleanup_loop())
+        self._keepalive_task = asyncio.ensure_future(self._keepalive_loop())
 
     async def _cleanup_loop(self):
         while True:
@@ -191,6 +196,35 @@ class Relay:
                 r = self.rooms.pop(k, None)
                 if r:
                     log.info("cleaned up stale room %r (empty for %ds)", r.name, int(now - r.last_active))
+
+    async def relay_lobby_heartbeats_once(self, now=None):
+        """Re-broadcast cached 0x35 0x30 lobby heartbeats in open rooms so backgrounded tabs do not trigger AoE2's 120s peer timeout."""
+        now = time.monotonic() if now is None else now
+        for room in list(self.rooms.values()):
+            flags = struct.unpack_from("<I", room.desc, 4)[0]
+            if flags & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED):
+                continue
+            players = list(room.players.values())
+            if len(players) < 2:
+                continue
+            for sp in players:
+                if sp.last_lobby_hb is None:
+                    continue
+                if now - sp.last_lobby_hb_at < LOBBY_HB_RELAY_INTERVAL:
+                    continue
+                sp.last_lobby_hb_at = now
+                tail = blob(sp.last_lobby_hb)
+                for dst in players:
+                    if dst.id != sp.id:
+                        await self._send_quiet(
+                            dst.conn,
+                            struct.pack("<BIII", MSG, 0, sp.id, dst.id) + tail,
+                        )
+
+    async def _keepalive_loop(self):
+        while True:
+            await asyncio.sleep(5)
+            await self.relay_lobby_heartbeats_once()
 
     async def _send_quiet(self, c, frame):
         try:
@@ -249,6 +283,8 @@ class Relay:
             return await self.reply(c, req, DP_OK, room.pack() + struct.pack("<I", len(players)) + b"".join(p.pack() for p in players))
         room = c.room
         if t == LEAVE:
+            if room:
+                log.info("#%d left room %r", c.n, room.name)
             await self.leave(c)
             return await self.reply(c, req, DP_OK)
         if not room:
@@ -268,10 +304,16 @@ class Relay:
             p = room.players.get(pid)
             if not p or p.conn is not c:
                 return await self.reply(c, req, DPERR_INVALIDPLAYER)
+            log.info("#%d deleted player %08X %r in %r", c.n, p.id, p.short, room.name)
             await self.drop_player(room, p)
             return await self.reply(c, req, DP_OK)
         if t == SEND:
             src, dst, flags, data = r.u32(), r.u32(), r.u32(), r.blob()
+            if dst == 0 and len(data) == 16 and data[:2] == b"\x35\x30":
+                sp = room.players.get(src)
+                if sp and sp.conn is c:
+                    sp.last_lobby_hb = data
+                    sp.last_lobby_hb_at = time.monotonic()
             if dst == 0:
                 targets = [p for p in room.players.values() if p.id != src]
             else:
@@ -287,6 +329,9 @@ class Relay:
             room.desc[:] = desc
             room.desc[8:24] = inst
             room.name, room.password = name, password
+            if struct.unpack_from("<I", room.desc, 4)[0] & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED):
+                for pl in room.players.values():
+                    pl.last_lobby_hb = None
             await self.to_room(room, struct.pack("<BI", SYS_SETDESC, 0) + room.pack(), but=c)
             return await self.reply(c, req, DP_OK)
         if t == SETPDATA:
@@ -573,10 +618,10 @@ async def main():
             async with tcp:
                 await stop.wait()
     finally:
-        for task in (relay._cleanup_task, watch_task):
+        for task in (relay._cleanup_task, relay._keepalive_task, watch_task):
             if task and not task.done():
                 task.cancel()
-        await asyncio.gather(*(t for t in (relay._cleanup_task, watch_task) if t), return_exceptions=True)
+        await asyncio.gather(*(t for t in (relay._cleanup_task, relay._keepalive_task, watch_task) if t), return_exceptions=True)
     log.info("relay stopped")
 
 

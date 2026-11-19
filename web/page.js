@@ -781,6 +781,7 @@ function presenter(module) {
         requestAnimationFrame(syncScreenRect);
         fpsLast = performance.now();
         firstFrame = false;
+        try { activeModule?._web_set_hidden?.(document.hidden ? 1 : 0); } catch {}
         if (activeRoomName || hostedRoom) setTimeout(measurePing, 2500);
         if ($('setup').hidden) sdl.focus();
       }
@@ -1335,8 +1336,26 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && gameRunning) requestWakeLock();
 });
 
+// --- Web Lock (signals active session to resist aggressive background throttling) ---
+let releaseSessionLockFn = null;
+function acquireSessionLock() {
+  if (releaseSessionLockFn || !navigator.locks?.request) return;
+  const name = 'aoe2-session-' + Math.random().toString(36).slice(2);
+  navigator.locks.request(name, () => new Promise((resolve) => {
+    releaseSessionLockFn = resolve;
+  })).catch(() => {});
+}
+function releaseSessionLock() {
+  if (releaseSessionLockFn) {
+    const fn = releaseSessionLockFn;
+    releaseSessionLockFn = null;
+    try { fn(); } catch {}
+  }
+}
+
 // --- Tab visibility warning ---
 function updateVisibilityWarning() {
+  try { activeModule?._web_set_hidden?.(document.hidden ? 1 : 0); } catch {}
   let el = $('tab-warn');
   if (document.hidden && gameRunning) {
     if (!el) {
@@ -1510,6 +1529,7 @@ function closeOnline() {
 
 function returnToLobby(msg) {
   exitPointerLockIfHeld();
+  try { activeModule?.closeRelay?.(); } catch {}
   gameRunning = false;
   activeModule = null;
   relayWsState = 'idle';
@@ -1519,6 +1539,7 @@ function returnToLobby(msg) {
   currentInviteUrl = '';
   stopPingPolling();
   releaseWakeLock();
+  releaseSessionLock();
   stopGameTimer();
   updateVisibilityWarning();
   setHudCollapsed(false);
@@ -1588,6 +1609,7 @@ async function play(launch) {
   gameRunning = true;
   stopRoomPolling();
   requestWakeLock();
+  acquireSessionLock();
   startGameTimer();
   startPingPolling();
   $('setup').hidden = true;
@@ -2088,6 +2110,11 @@ try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
 $('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
 try { $('roomname').value = localStorage.getItem('aoe2.room') || ''; } catch {}
 $('roomname').oninput = () => { try { localStorage.setItem('aoe2.room', $('roomname').value); } catch {} };
+
+window.addEventListener('pagehide', () => {
+  try { activeModule?.closeRelay?.(); } catch {}
+  releaseSessionLock();
+});
 
 if ('serviceWorker' in navigator) {
   const hadController = Boolean(navigator.serviceWorker.controller);
