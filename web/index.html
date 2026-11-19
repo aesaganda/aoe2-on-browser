@@ -572,6 +572,7 @@
     background: #23252f;
     color: var(--dim);
     border: 1px solid #353846;
+    flex-shrink: 0;
   }
   .room-badge.open {
     color: var(--ok);
@@ -583,12 +584,52 @@
     border-color: rgba(229, 169, 60, 0.35);
     background: rgba(229, 169, 60, 0.08);
   }
+  .room-age {
+    font: 11px/1.2 ui-monospace, monospace;
+    color: #9e9b93;
+    flex-shrink: 0;
+  }
   .room-players {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 12px;
     color: var(--dim);
     overflow: hidden;
+    white-space: nowrap;
+  }
+  .player-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    line-height: 1.2;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #23252f;
+    border: 1px solid #353846;
+    color: #dcd9d0;
+    flex-shrink: 0;
+  }
+  .player-chip.host {
+    background: rgba(212, 173, 83, 0.14);
+    border-color: rgba(212, 173, 83, 0.36);
+    color: var(--accent-bright);
+  }
+  #game-ui #hud-room-pill {
+    font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+    padding: 4px 9px;
+    background: rgba(212, 173, 83, 0.14);
+    border: 1px solid rgba(212, 173, 83, 0.34);
+    color: var(--accent-bright);
+    max-width: 240px;
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  #game-ui #hud-room-pill:hover {
+    background: rgba(212, 173, 83, 0.24);
+    border-color: var(--accent);
   }
   .dimmed { opacity: 0.55; }
 
@@ -815,6 +856,7 @@
     <span id="game-timer" class="hud-metric"></span>
     <span id="fps" class="hud-metric"></span>
     <span id="ping" class="hud-metric"></span>
+    <button id="hud-room-pill" hidden title="Active multiplayer room"></button>
   </div>
   <div class="hud-group">
     <button id="hud-invite-btn" hidden title="Copy invite link for your hosted room">📋 Invite</button>

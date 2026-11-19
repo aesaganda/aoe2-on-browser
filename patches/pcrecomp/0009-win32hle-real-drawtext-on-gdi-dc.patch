@@ -1,0 +1,249 @@
+diff -ruN a/runtime/win32hle/gdidc.c b/runtime/win32hle/gdidc.c
+--- a/runtime/win32hle/gdidc.c	2026-11-19 14:08:27.405317408 +0300
++++ b/runtime/win32hle/gdidc.c	2026-11-19 14:08:27.426189435 +0300
+@@ -815,6 +815,204 @@
+     RET(1, 5);
+ }
+ 
++static int dt_measure(const font_t *f, TTF_Font *ttf, float sx, const char *s, int len) {
++    if (len <= 0) return 0;
++    if (!ttf) return len * 6;
++    char tmp[1024];
++    int n = len < (int)sizeof(tmp) - 1 ? len : (int)sizeof(tmp) - 1;
++    memcpy(tmp, s, (size_t)n);
++    tmp[n] = '\0';
++    int w = 0, h = 0;
++    if (TTF_SizeText(ttf, tmp, &w, &h) != 0) return len * 6;
++    return scaled(w, sx) + (f->synth_bold ? len : 0);
++}
++
++int hle_gdi_draw_text(uint32_t hdc, const char *s, int n, int *l, int *t, int *r, int *b, uint32_t fmt) {
++    enum {
++        DT_CENTER_F     = 0x001u,
++        DT_RIGHT_F      = 0x002u,
++        DT_VCENTER_F    = 0x004u,
++        DT_BOTTOM_F     = 0x008u,
++        DT_WORDBREAK_F  = 0x010u,
++        DT_SINGLELINE_F = 0x020u,
++        DT_NOCLIP_F     = 0x100u,
++        DT_CALCRECT_F   = 0x400u,
++        DT_NOPREFIX_F   = 0x800u,
++    };
++    if (!s) return 0;
++    if (n < 0) n = (int)strlen(s);
++    if (n <= 0) return 0;
++
++    dc_t *d = DC(hdc);
++    font_t *f = FONT(d ? d->font : SYSTEM_FONT);
++    TTF_Font *ttf = ttf_of(f);
++
++    char clean[2048];
++    int clen = 0;
++    for (int i = 0; i < n && s[i] && clen < (int)sizeof(clean) - 1; i++) {
++        if (!(fmt & DT_NOPREFIX_F) && s[i] == '&') {
++            if (i + 1 < n && s[i + 1] == '&') {
++                clean[clen++] = '&';
++                i++;
++            }
++            continue;
++        }
++        clean[clen++] = s[i];
++    }
++    clean[clen] = '\0';
++
++    float sx = ttf ? hscale(f, ttf) : 1.0f;
++    int line_h = ttf ? TTF_FontHeight(ttf) : 13;
++    if (line_h < 1) line_h = 13;
++    int rect_w = (l && r) ? (*r - *l) : 0;
++
++    const char *lptr[64];
++    int llen[64];
++    int lw[64];
++    int nlines = 0;
++
++    if (fmt & DT_SINGLELINE_F) {
++        for (int i = 0; i < clen; i++) {
++            if (clean[i] == '\r' || clean[i] == '\n') clean[i] = ' ';
++        }
++        lptr[0] = clean;
++        llen[0] = clen;
++        lw[0] = dt_measure(f, ttf, sx, clean, clen);
++        nlines = 1;
++    } else {
++        int i = 0;
++        while (i <= clen && nlines < 64) {
++            int pstart = i;
++            while (i < clen && clean[i] != '\r' && clean[i] != '\n') i++;
++            int pend = i;
++            if (pend == pstart) {
++                lptr[nlines] = clean + pstart;
++                llen[nlines] = 0;
++                lw[nlines] = 0;
++                nlines++;
++            } else if (!(fmt & DT_WORDBREAK_F) || rect_w <= 0) {
++                lptr[nlines] = clean + pstart;
++                llen[nlines] = pend - pstart;
++                lw[nlines] = dt_measure(f, ttf, sx, lptr[nlines], llen[nlines]);
++                nlines++;
++            } else {
++                int pos = pstart;
++                while (pos < pend && nlines < 64) {
++                    int best_end = pos;
++                    int best_next = pos;
++                    int scan = pos;
++                    int w = 0;
++                    while (scan < pend) {
++                        int sp = scan;
++                        while (sp < pend && (clean[sp] == ' ' || clean[sp] == '\t')) sp++;
++                        if (sp >= pend) {
++                            if (scan == pos) { best_end = pend; w = dt_measure(f, ttf, sx, clean + pos, best_end - pos); }
++                            best_next = pend;
++                            break;
++                        }
++                        int we = sp;
++                        while (we < pend && clean[we] != ' ' && clean[we] != '\t') we++;
++                        int cand_w = dt_measure(f, ttf, sx, clean + pos, we - pos);
++                        if (scan == pos || cand_w <= rect_w) {
++                            best_end = we;
++                            best_next = we;
++                            while (best_next < pend && (clean[best_next] == ' ' || clean[best_next] == '\t')) best_next++;
++                            w = cand_w;
++                            scan = we;
++                            if (cand_w > rect_w) break;
++                        } else {
++                            break;
++                        }
++                    }
++                    if (best_next <= pos) best_next = pend;
++                    lptr[nlines] = clean + pos;
++                    llen[nlines] = best_end - pos;
++                    lw[nlines] = w;
++                    nlines++;
++                    pos = best_next;
++                }
++            }
++            if (i >= clen) break;
++            if (clean[i] == '\r' && i + 1 < clen && clean[i + 1] == '\n') i += 2;
++            else i++;
++        }
++    }
++
++    int max_w = 0;
++    for (int k = 0; k < nlines; k++) {
++        if (lw[k] > max_w) max_w = lw[k];
++    }
++    int total_h = (nlines > 0 ? nlines : 1) * line_h;
++
++    if (fmt & DT_CALCRECT_F) {
++        if (l && r) *r = *l + max_w;
++        if (t && b) *b = *t + total_h;
++        return total_h;
++    }
++    if (!d || !d->px || !ttf || (d->bpp != 8 && d->bpp != 16 && d->bpp != 32)) return total_h;
++
++    int rl = l ? *l : 0;
++    int rt = t ? *t : 0;
++    int rr = r ? *r : d->w;
++    int rb = b ? *b : d->h;
++
++    int base_y = rt;
++    if (fmt & DT_BOTTOM_F) base_y = rb - total_h;
++    else if (fmt & DT_VCENTER_F) base_y = rt + ((rb - rt) - total_h) / 2;
++
++    int ox = d->wox - d->vox;
++    int oy = d->woy - d->voy;
++    int cl = 0, ct = 0, cr = d->w, cb = d->h;
++    if (!(fmt & DT_NOCLIP_F) && rr > rl && rb > rt) {
++        if (rl - ox > cl) cl = rl - ox;
++        if (rt - oy > ct) ct = rt - oy;
++        if (rr - ox < cr) cr = rr - ox;
++        if (rb - oy < cb) cb = rb - oy;
++    }
++
++    uint32_t fg = pack(d, d->text);
++    uint32_t bg = pack(d, d->bk);
++
++    for (int k = 0; k < nlines; k++) {
++        if (llen[k] <= 0) continue;
++        char lbuf[1024];
++        int ln = llen[k] < (int)sizeof(lbuf) - 1 ? llen[k] : (int)sizeof(lbuf) - 1;
++        memcpy(lbuf, lptr[k], (size_t)ln);
++        lbuf[ln] = '\0';
++        int iw = 0, ih = 0;
++        uint8_t *ink = text_ink(f, ttf, lbuf, ln, &iw, &ih);
++        if (!ink) continue;
++        if (sx != 1.0f) {
++            int nw = scaled(iw, sx);
++            ink = ink_scale(ink, iw, ih, nw);
++            iw = nw < 1 ? 1 : nw;
++        }
++        int lx = rl;
++        if (fmt & DT_CENTER_F) lx = rl + ((rr - rl) - lw[k]) / 2;
++        else if (fmt & DT_RIGHT_F) lx = rr - lw[k];
++        int ly = base_y + k * line_h;
++        for (int j = 0; j < ih; j++) {
++            int py = ly - oy + j;
++            if (py < ct || py >= cb) continue;
++            for (int i = 0; i < iw; i++) {
++                int px = lx - ox + i;
++                if (px < cl || px >= cr) continue;
++                int a = ink[j * iw + i];
++                if (d->bpp == 8) {
++                    if (a >= 128) put(d, px, py, fg);
++                    else if (d->bkmode == OPAQUE) put(d, px, py, bg);
++                } else if (d->bkmode == OPAQUE) {
++                    put(d, px, py, mix(d, bg, fg, a));
++                } else if (a) {
++                    put(d, px, py, mix(d, get(d, px, py), fg, a));
++                }
++            }
++        }
++        free(ink);
++    }
++    return total_h;
++}
++
+ /* ---- drawing ---- */
+ static void rectfill(dc_t *d, int l, int t, int r, int b, uint32_t cr) {
+     if (!d || !d->px) return;
+diff -ruN a/runtime/win32hle/user32.c b/runtime/win32hle/user32.c
+--- a/runtime/win32hle/user32.c	2026-11-19 14:08:27.409373847 +0300
++++ b/runtime/win32hle/user32.c	2026-11-19 14:08:27.426978020 +0300
+@@ -2296,14 +2296,21 @@
+ static void u_AdjustWindowRect(void)   { RET(1, 3); }    /* no non-client area here */
+ static void u_AdjustWindowRectEx(void) { RET(1, 4); }
+ 
+-/* text: one fixed-pitch measure for everything (the game draws its own) */
+ static void u_DrawTextA(void) {                          /* (hdc, text, n, rect, format) */
++    uint32_t hdc = A32(0), r = A32(3), fmt = A32(4);
+     const char *s = ASTR(1);
+     int n = (int)A32(2);
+-    uint32_t r = A32(3);
+-    if (n < 0) n = s ? (int)strlen(s) : 0;
+-    if (r && (A32(4) & 0x400u)) MEM32(r + 8) = MEM32(r) + (uint32_t)(n * 6), MEM32(r + 12) = MEM32(r + 4) + 13;   /* DT_CALCRECT */
+-    RET(13, 5);
++    int rl = 0, rt = 0, rr = 0, rb = 0;
++    if (r) {
++        rl = (int)MEM32(r); rt = (int)MEM32(r + 4);
++        rr = (int)MEM32(r + 8); rb = (int)MEM32(r + 12);
++    }
++    int h = hle_gdi_draw_text(hdc, s, n, &rl, &rt, &rr, &rb, fmt);
++    if (r && (fmt & 0x400u)) {                           /* DT_CALCRECT */
++        MEM32(r) = (uint32_t)rl; MEM32(r + 4) = (uint32_t)rt;
++        MEM32(r + 8) = (uint32_t)rr; MEM32(r + 12) = (uint32_t)rb;
++    }
++    RET((uint32_t)h, 5);
+ }
+ 
+ /* wsprintfA is cdecl: the caller pops, so only the return address goes. */
+diff -ruN a/runtime/win32hle/win32hle.h b/runtime/win32hle/win32hle.h
+--- a/runtime/win32hle/win32hle.h	2026-11-19 14:08:27.411549667 +0300
++++ b/runtime/win32hle/win32hle.h	2026-11-19 14:08:27.425966706 +0300
+@@ -305,6 +305,7 @@
+ extern const win32hle_shim win32hle_gdidc[];          /* DCs, fonts, text (SDL2_ttf) */
+ uint32_t hle_gdi_surface_dc(uint8_t *px, int w, int h, int pitch, int bpp);   /* a DC drawing into those pixels */
+ void     hle_gdi_dc_set_palette_entries(uint32_t hdc, const uint32_t *pe);    /* 8bpp: its DirectDraw palette (live) */
++int      hle_gdi_draw_text(uint32_t hdc, const char *s, int n, int *l, int *t, int *r, int *b, uint32_t fmt);
+ /* A GDI game's screen: the pixels its window DCs (GetDC, BeginPaint) draw
+  * into, at the display mode's size; screen.c shows them when there is no
+  * DirectDraw primary. seq changes when they may have. */

@@ -781,6 +781,7 @@ function presenter(module) {
         requestAnimationFrame(syncScreenRect);
         fpsLast = performance.now();
         firstFrame = false;
+        if (activeRoomName || hostedRoom) setTimeout(measurePing, 2500);
         if ($('setup').hidden) sdl.focus();
       }
     },
@@ -976,6 +977,41 @@ function buildInviteUrl(room) {
   return u.toString();
 }
 
+function formatRoomAge(ageS) {
+  const s = Math.max(0, Math.floor(Number(ageS) || 0));
+  if (s < 60) return '<1m';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function updateHudRoomPill(rooms) {
+  const pill = $('hud-room-pill');
+  if (!pill) return;
+  if (!gameRunning || (!hostedRoom && !activeRoomId && !activeRoomName)) {
+    pill.hidden = true;
+    pill.textContent = '';
+    return;
+  }
+  const list = Array.isArray(rooms) ? rooms : [];
+  const rm = list.find((r) => (activeRoomId && r.id === activeRoomId) || r.name === (hostedRoom || activeRoomName)) || null;
+  if (rm) {
+    const maxPlayers = Math.min(8, rm.max || 8);
+    const roster = rm.players.length ? rm.players.join(', ') : 'waiting';
+    pill.textContent = `👥 ${rm.players.length}/${maxPlayers} · ${rm.name}`;
+    pill.title = `Room: ${rm.name} (${rm.open ? 'Lobby' : 'In Progress'}) — Players: ${roster}`;
+    pill.hidden = false;
+  } else if (activeRoomName || hostedRoom) {
+    const name = hostedRoom || activeRoomName;
+    pill.textContent = `👥 ${name}`;
+    pill.title = `Room: ${name}`;
+    pill.hidden = false;
+  } else {
+    pill.hidden = true;
+  }
+}
+
 function updateInviteBanner(rooms) {
   const banner = $('invite-banner');
   const urlEl = $('invite-url');
@@ -1072,7 +1108,11 @@ async function listRooms() {
     consecutiveFails = 0;
     pollBackoff = POLL_MIN;
     const totalPlayers = rooms.reduce((s, rm) => s + rm.players.length, 0);
-    setStatus(true, totalPlayers ? `${totalPlayers} online · ${ping}ms` : `connected · ${ping}ms`, totalPlayers, rooms.length);
+    const onlineCount = typeof data.online === 'number' ? Math.max(data.online, totalPlayers) : totalPlayers;
+    const statusParts = [];
+    if (onlineCount > 0) statusParts.push(`${onlineCount} online`);
+    if (rooms.length > 0) statusParts.push(`${rooms.length} ${rooms.length === 1 ? 'room' : 'rooms'}`);
+    setStatus(true, statusParts.length ? `${statusParts.join(' · ')} · ${ping}ms` : `connected · ${ping}ms`, onlineCount, rooms.length);
     if (wasOffline) log('Reconnected to the game server.');
   } catch {
     consecutiveFails++;
@@ -1084,6 +1124,7 @@ async function listRooms() {
 
   checkHostedRoomJoins(rooms);
   updateInviteBanner(rooms);
+  updateHudRoomPill(rooms);
 
   const box = $('rooms'), key = JSON.stringify(rooms) + $('play').hidden;
   if (box.dataset.key === key) return;
@@ -1113,11 +1154,28 @@ async function listRooms() {
     countBadge.className = 'room-badge ' + (r.open ? 'open' : 'playing');
     countBadge.textContent = `${r.players.length}/${maxPlayers} · ${r.open ? 'Waiting' : 'In Progress'}`;
 
-    const players = document.createElement('span');
-    players.className = 'room-players';
-    players.textContent = r.players.length ? `(${r.players.join(', ')})` : '';
+    const mainChildren = [title, countBadge];
+    if (typeof r.age_s === 'number') {
+      const age = document.createElement('span');
+      age.className = 'room-age';
+      age.textContent = formatRoomAge(r.age_s);
+      age.title = 'Room age';
+      mainChildren.push(age);
+    }
+    if (r.players.length) {
+      const players = document.createElement('span');
+      players.className = 'room-players';
+      for (const p of r.players) {
+        const chip = document.createElement('span');
+        const isHost = Boolean(r.host) && p === r.host;
+        chip.className = 'player-chip' + (isHost ? ' host' : '');
+        chip.textContent = isHost ? `👑 ${p}` : p;
+        players.append(chip);
+      }
+      mainChildren.push(players);
+    }
 
-    main.append(title, countBadge, players);
+    main.append(...mainChildren);
 
     const actions = document.createElement('span');
     actions.style.display = 'flex';
@@ -1198,6 +1256,8 @@ let gameRunning = false;
 let activeModule = null;
 let relayWsState = 'idle';
 let hostedRoom = null;
+let activeRoomId = null;
+let activeRoomName = null;
 let knownPlayers = new Set();
 let pingInterval = null;
 let buildVersion = '';
@@ -1216,11 +1276,16 @@ async function measurePing() {
     }
     const rooms = data.rooms || [];
     const totalPlayers = rooms.reduce((s, rm) => s + rm.players.length, 0);
+    const onlineCount = typeof data.online === 'number' ? Math.max(data.online, totalPlayers) : totalPlayers;
+    const statusParts = [];
+    if (onlineCount > 0) statusParts.push(`${onlineCount} online`);
+    if (rooms.length > 0) statusParts.push(`${rooms.length} ${rooms.length === 1 ? 'room' : 'rooms'}`);
     if (relayWsState !== 'reconnecting' && relayWsState !== 'lost') {
-      setStatus(true, totalPlayers ? `${totalPlayers} online · ${ms}ms` : `connected · ${ms}ms`, totalPlayers, rooms.length);
+      setStatus(true, statusParts.length ? `${statusParts.join(' · ')} · ${ms}ms` : `connected · ${ms}ms`, onlineCount, rooms.length);
     }
     checkHostedRoomJoins(rooms);
     updateInviteBanner(rooms);
+    updateHudRoomPill(rooms);
   } catch {
     if (relayWsState !== 'reconnecting' && relayWsState !== 'lost') {
       $('ping').textContent = '';
@@ -1449,6 +1514,8 @@ function returnToLobby(msg) {
   activeModule = null;
   relayWsState = 'idle';
   hostedRoom = null;
+  activeRoomId = null;
+  activeRoomName = null;
   currentInviteUrl = '';
   stopPingPolling();
   releaseWakeLock();
@@ -1458,6 +1525,7 @@ function returnToLobby(msg) {
   $('loading').hidden = true;
   $('game-ui').hidden = true;
   if ($('hud-invite-btn')) $('hud-invite-btn').hidden = true;
+  if ($('hud-room-pill')) { $('hud-room-pill').hidden = true; $('hud-room-pill').textContent = ''; }
   $('canvas').hidden = true;
   $('screen').hidden = true;
   if ($('crt-scanlines')) $('crt-scanlines').hidden = true;
@@ -1499,6 +1567,19 @@ async function play(launch) {
   }
   launchedRes = selectedRes;
   if ($('apply-res')) $('apply-res').hidden = true;
+  if (launch && launch.lobby) {
+    if (launch.lobby === 'host') {
+      activeRoomId = null;
+      activeRoomName = launch.room || null;
+    } else if (launch.lobby.startsWith('join:')) {
+      activeRoomId = launch.lobby.slice(5) || null;
+      activeRoomName = launch.room || null;
+    }
+  } else {
+    activeRoomId = null;
+    activeRoomName = null;
+  }
+  updateHudRoomPill([]);
   if (!crossOriginIsolated) { returnToLobby('This page must be served cross-origin isolated (tools/web/serve.py does).'); return; }
   const exe = await copiedExe().catch(() => null);
   const problem = exe ? await exeProblem(exe) : 'The browser cache has no age2_x1\\age2_x1.exe.';
@@ -1829,6 +1910,7 @@ async function init() {
 
 // --- UI Event Listeners ---
 $('online-btn').onclick = () => { if ($('setup').hidden) openOnline(); else closeOnline(); };
+if ($('hud-room-pill')) $('hud-room-pill').onclick = () => { if ($('setup').hidden) openOnline(); else closeOnline(); };
 $('play').onclick = () => { if (gameRunning) closeOnline(); else play(); };
 $('host').onclick = () => {
   const room = ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30);

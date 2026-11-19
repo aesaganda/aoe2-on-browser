@@ -494,16 +494,28 @@ def create_relay_handlers(relay, max_conns=MAX_CONNS, max_conns_per_ip=MAX_CONNS
             return _build_http_response(arg1, http.HTTPStatus.OK, json_headers, body)
         if not p.endswith("/rooms"):
             return None
+        now = time.monotonic()
         rooms = []
         for r in relay.rooms.values():
             flags = struct.unpack_from("<I", r.desc, 4)[0]
+            host_player = next((pl for pl in r.players.values() if pl.conn is r.host), None)
+            if host_player:
+                host_name = host_player.short.decode("cp1252", "replace")
+            elif r.host and r.host.name and r.host.name != b"?":
+                host_name = r.host.name.decode("cp1252", "replace")
+            else:
+                host_name = ""
             rooms.append({
-                "id": r.instance.hex(), "name": r.name.decode("cp1252", "replace"),
-                "players": [p.short.decode("cp1252", "replace") for p in r.players.values()],
-                "max": min(r.max_players(), MAX_PLAYERS_PER_ROOM), "open": not flags & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED),
+                "id": r.instance.hex(),
+                "name": r.name.decode("cp1252", "replace"),
+                "host": host_name,
+                "age_s": int(max(0, now - r.created)),
+                "players": [pl.short.decode("cp1252", "replace") for pl in r.players.values()],
+                "max": min(r.max_players(), MAX_PLAYERS_PER_ROOM),
+                "open": not flags & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED),
                 "password": bool(r.password),
             })
-        body = json.dumps({"rooms": rooms, "chat": relay.chat_log}).encode()
+        body = json.dumps({"rooms": rooms, "chat": relay.chat_log, "online": relay.conn_count}).encode()
         return _build_http_response(arg1, http.HTTPStatus.OK, json_headers, body)
 
     return ws_handler, tcp_handler, process_request

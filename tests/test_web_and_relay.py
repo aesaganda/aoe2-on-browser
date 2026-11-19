@@ -428,7 +428,7 @@ class TestRelay(unittest.IsolatedAsyncioTestCase):
 
         st, _, b = await asyncio.to_thread(_http_get, "127.0.0.1", self.port, "/rooms")
         self.assertEqual(st, 200)
-        self.assertEqual(json.loads(b), {"rooms": [], "chat": []})
+        self.assertEqual(json.loads(b), {"rooms": [], "chat": [], "online": 0})
 
         ip1_headers = {"X-Forwarded-For": "198.51.100.1"}
         for i in range(relay.CHAT_RATE_LIMIT):
@@ -470,7 +470,7 @@ class TestRelay(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(res_v14, websockets.http11.Response)
         self.assertEqual(res_v14.status_code, 200)
-        self.assertEqual(json.loads(res_v14.body), {"rooms": [], "chat": []})
+        self.assertEqual(json.loads(res_v14.body), {"rooms": [], "chat": [], "online": 0})
         self.assertEqual(res_v14.headers["Content-Type"], "application/json; charset=utf-8")
 
     async def test_ws_directplay_hello_list_create_roundtrip(self):
@@ -506,9 +506,14 @@ class TestRelay(unittest.IsolatedAsyncioTestCase):
 
             st, _, b = await asyncio.to_thread(_http_get, "127.0.0.1", self.port, "/rooms")
             self.assertEqual(st, 200)
-            rooms = json.loads(b)["rooms"]
+            payload = json.loads(b)
+            self.assertGreaterEqual(payload["online"], 1)
+            rooms = payload["rooms"]
             self.assertEqual(len(rooms), 1)
             self.assertEqual(rooms[0]["name"], "Arena")
+            self.assertEqual(rooms[0]["host"], "Commander")
+            self.assertIsInstance(rooms[0]["age_s"], int)
+            self.assertGreaterEqual(rooms[0]["age_s"], 0)
             self.assertEqual(rooms[0]["max"], 4)
             self.assertTrue(rooms[0]["open"])
             self.assertFalse(rooms[0]["password"])

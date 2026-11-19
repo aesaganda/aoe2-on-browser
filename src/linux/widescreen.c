@@ -136,13 +136,20 @@ static int ws_decode_slp_row(const uint8_t *slp, uint32_t cmd_off, uint32_t out_
     return 1;
 }
 
-static void ws_fill_mirrored(uint8_t *dst, int count, const uint8_t *src_row, int tile_x, int tile_w) {
-    if (count <= 0 || tile_w <= 0) return;
-    int period = tile_w * 2;
-    for (int i = 0; i < count; i++) {
-        int m = i % period;
-        int idx = (m < tile_w) ? m : (period - 1 - m);
-        dst[i] = src_row[tile_x + idx];
+static void ws_fill_palindrome(uint8_t *dst, int count, const uint8_t *src_row, int anchor, int max_w, int dir) {
+    if (count <= 0 || max_w <= 0) return;
+    int cycles = (count + 2 * max_w - 1) / (2 * max_w);
+    if (cycles < 1) cycles = 1;
+    int base_len = count / cycles;
+    int rem = count % cycles;
+    int pos = 0;
+    for (int c = 0; c < cycles; c++) {
+        int L = base_len + (c < rem ? 1 : 0);
+        for (int k = 0; k < L; k++) {
+            int idx = (k < L / 2) ? k : (L - 1 - k);
+            if (idx >= max_w) idx = max_w - 1;
+            dst[pos++] = src_row[anchor + dir * idx];
+        }
     }
 }
 
@@ -202,12 +209,11 @@ static void ws_build_hud_slp(uint32_t tshape, int baseW, int baseH, int topH, in
 
     /* Top HUD bar */
     int top_split = (baseW == 1280) ? 450 : 445;
-    int top_tile_x = top_split;
     int top_tile_w = 64;
     for (int y = 0; y < topH; y++) {
         if (!ws_decode_slp_row(orig, orig_cmd, orig_out, baseW, y, src_row)) continue;
         memcpy(wide_row, src_row, (size_t)top_split);
-        ws_fill_mirrored(wide_row + top_split, dx, src_row, top_tile_x, top_tile_w);
+        ws_fill_palindrome(wide_row + top_split, dx, src_row, top_split, top_tile_w, +1);
         memcpy(wide_row + top_split + dx, src_row + top_split, (size_t)(baseW - top_split));
 
         put16_le(dst + out_off + (size_t)y * 4u, 0u);
@@ -223,19 +229,18 @@ static void ws_build_hud_slp(uint32_t tshape, int baseW, int baseH, int topH, in
     /* Bottom HUD bar */
     int dxL = dx / 2;
     int dxR = dx - dxL;
-    int splitL = (baseW == 1280) ? 352 : 296;
-    int tileLW = 48;
-    int splitR = (baseW == 1280) ? 824 : 656;
-    int tileRW = 48;
-    int tileR = splitR - tileRW;
+    int splitL = (baseW == 1280) ? 384 : 328;
+    int tileLW = (baseW == 1280) ? 64 : 48;
+    int splitR = (baseW == 1280) ? 728 : 616;
+    int tileRW = (baseW == 1280) ? 64 : 48;
     for (int r = 0; r < botH; r++) {
         int sy = baseH - botH + r;
         int dy = H - botH + r;
         if (!ws_decode_slp_row(orig, orig_cmd, orig_out, baseW, sy, src_row)) continue;
         memcpy(wide_row, src_row, (size_t)splitL);
-        ws_fill_mirrored(wide_row + splitL, dxL, src_row, splitL, tileLW);
+        ws_fill_palindrome(wide_row + splitL, dxL, src_row, splitL, tileLW, +1);
         memcpy(wide_row + splitL + dxL, src_row + splitL, (size_t)(splitR - splitL));
-        ws_fill_mirrored(wide_row + splitR + dxL, dxR, src_row, tileR, tileRW);
+        ws_fill_palindrome(wide_row + splitR + dxL, dxR, src_row, splitR - 1, tileRW, -1);
         memcpy(wide_row + splitR + dx, src_row + splitR, (size_t)(baseW - splitR));
 
         put16_le(dst + out_off + (size_t)dy * 4u, 0u);
@@ -272,6 +277,19 @@ static void ws_reflow_widgets(uint32_t self, int baseW, int baseH, int W, int H)
         ws_set_fixed(map, 0, topY + 30, W, H - (topY + 30 + botH));
     } else {
         ws_set_fixed(map, 0, topY, W, H - (topY + botH));
+    }
+
+    /* Reflow stacked scoreboard rows (0x11C8[14..0]) bottom-up so every row above row 14 follows map's new right/bottom */
+    for (int i = 14; i >= 0; i--) {
+        ws_call_panel_size(MEM32(self + 0x11C8u + (uint32_t)i * 4u), W, H);
+    }
+    /* Reflow top-right clock, status stack, and center banner overlays */
+    static const uint32_t overlay_offs[] = {
+        0x11C0u, 0x114Cu, 0x1150u, 0x113Cu,
+        0x1178u, 0x117Cu, 0x1180u, 0x1184u, 0x1188u, 0x118Cu
+    };
+    for (size_t i = 0; i < sizeof(overlay_offs) / sizeof(overlay_offs[0]); i++) {
+        ws_call_panel_size(MEM32(self + overlay_offs[i]), W, H);
     }
 
     if (baseW == 1024) {
