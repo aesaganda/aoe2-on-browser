@@ -34,3 +34,5 @@ pytest.ini
 *.mgz
 *.gpr
 *.rep/
+install/
+install.tmp/

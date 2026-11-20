@@ -30,7 +30,34 @@ This repository contains tools and runtime code only. No game binaries, no game
 data, and nothing generated from the game's code (ADR-0002). Put your
 `age2_x1.exe` in `orig/` (git-ignored), or pass `EXE=/path/to/age2_x1.exe`.
 
-## Quick start (Ubuntu 24.04 or WSL)
+## Play it: one command (Docker)
+
+All you need is Docker (Linux, macOS, or Windows with WSL 2), your two disc
+images and your unprotected `age2_x1.exe`:
+
+```bash
+git clone --recursive https://github.com/aesaganda/aoe2-on-browser
+cd aoe2-on-browser
+./play.sh --exe /path/to/age2_x1.exe --aok /path/to/AoE2.iso --aoc /path/to/AoE2_Conquerors.iso
+```
+
+Then open http://localhost:8642/. Already have an install tree (`age2_x1/age2_x1.exe`,
+`data/`, `sound/`, ...)? Use `./play.sh --install ~/aoe2-install` instead.
+
+`play.sh` pulls the toolchain image (`ghcr.io/aesaganda/aoe2-recomp-builder`:
+Ghidra, emsdk, the lifter; no game files in it), builds the browser version from
+*your* executable into `build/web/`, lays out `install/` from your discs, and starts
+the web server, the multiplayer relay and the gateway with Docker Compose. The first
+build takes tens of minutes and several GB of RAM (lower `AOE2_JOBS` if it runs out);
+after that `./play.sh` just starts it, and `./play.sh --stop` stops it. Your files
+stay on your machine (ADR-0002).
+
+The page needs a secure context: `localhost` works, a plain `http://` LAN address
+does not. To play from other machines, or online with friends, put it behind HTTPS
+(`docs/docker-nginx.md`). On a Linux ARM host (Raspberry Pi) the toolchain image is
+built locally the first time.
+
+## Quick start for development (Ubuntu 24.04 or WSL)
 
 ```bash
 sudo apt install build-essential python3-venv openjdk-25-jdk-headless mingw-w64 gcc-multilib unzip curl
@@ -96,6 +123,8 @@ This replays a recorded game with the game's own sync checking. `tools/oracle/wi
 ## Layout
 
 ```
+play.sh          one-command build + run with Docker (see above)
+docker/builder/  the toolchain image play.sh builds in
 docs/            reports (generated: recon.md, imports.md, ghidra.md) and ADRs
 docs/adr/        architecture decision records (0000-template.md)
 tools/recon/     PE / import / COM recon (pefile + capstone)
@@ -106,4 +135,5 @@ tests/fixtures/  synthetic PE for the binary-free CI path
 third_party/     pcrecomp (submodule)
 orig/            your game files (ignored)
 build/           everything generated from the binary (ignored)
+install/         the install tree play.sh lays out from your discs (ignored)
 ```
