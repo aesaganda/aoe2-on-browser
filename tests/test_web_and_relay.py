@@ -300,6 +300,35 @@ class TestServe(unittest.TestCase):
         st404, _, _ = _http_get(host_no_inst, port_no_inst, "/install/bundle.tar")
         self.assertEqual(st404, 404)
 
+    def test_install_bundle_chunks_join_to_bundle_tar(self):
+        host, port = self._start_serve()
+        _, _, whole = _http_get(host, port, "/install/bundle.tar")
+
+        # any chunk size: the pieces of every range join back into the whole stream
+        entries = serve.bundle_index(self.install_dir)
+        total = serve.bundle_size(entries)
+        self.assertEqual(total, len(whole))
+        for size in (1, 7, 511, 512, 513, 1000, total):
+            joined = b"".join(b"".join(serve.bundle_pieces(entries, s, min(total, s + size)))
+                              for s in range(0, total, size))
+            self.assertEqual(joined, whole, size)
+
+        st, hdrs, body = _http_get(host, port, "/install/bundle.json")
+        self.assertEqual(st, 200)
+        self.assertEqual(dict((k.lower(), v) for k, v in hdrs.items())["cache-control"], "no-cache")
+        info = json.loads(body)
+        self.assertEqual(info["size"], total)
+        self.assertEqual(info["count"], 1)
+
+        st, hdrs, chunk = _http_get(host, port, f"/install/bundle/{info['tag']}/0.tar")
+        lower = {k.lower(): v for k, v in hdrs.items()}
+        self.assertEqual(st, 200)
+        self.assertEqual(chunk, whole)
+        self.assertEqual(lower["cache-control"], "public, max-age=31536000, immutable")
+
+        for bad in (f"/install/bundle/{info['tag']}/1.tar", "/install/bundle/0-0-0/0.tar"):
+            self.assertEqual(_http_get(host, port, bad)[0], 404, bad)
+
     def test_range_206_and_416(self):
         host, port = self._start_serve()
         st206, hdrs206, body206 = _http_get(

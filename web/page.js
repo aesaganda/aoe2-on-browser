@@ -143,12 +143,75 @@ async function fetchRetry(url, opts, retries = 3) {
   }
 }
 
+// The game bundle as one tar stream. Servers that list it in install/bundle.json
+// serve it in chunks under a versioned URL, which a CDN can cache (Cloudflare's free
+// plan does not cache the 500+ MB whole); those are fetched a few ahead, and a chunk
+// that breaks off is fetched again from where it stopped. Older servers send
+// install/bundle.tar in one piece.
+async function openBundle() {
+  let info = null;
+  try {
+    const r = await fetch('install/bundle.json', { cache: 'no-store' });
+    if (r.ok) info = await r.json();
+  } catch { /* no chunked bundle on this server */ }
+  if (!info || !(info.count > 0)) {
+    const r = await fetchRetry('install/bundle.tar', { cache: 'no-store' });
+    if (!r.body) throw new Error('ReadableStream not supported for bundle.tar');
+    return { total: parseInt(r.headers.get('content-length') || '0', 10), reader: r.body.getReader() };
+  }
+
+  const AHEAD = 3;
+  const pending = new Map();
+  const want = (k) => {
+    if (k >= info.count || pending.has(k)) return;
+    const p = fetchRetry(`install/bundle/${info.tag}/${k}.tar`);
+    p.catch(() => {});                  /* awaited (and reported) when its turn comes */
+    pending.set(k, p);
+  };
+  const length = (k) => Math.min(info.chunk, info.size - k * info.chunk);
+  let i = 0, body = null, sent = 0, read = 0, attempt = 0;
+  const stream = new ReadableStream({
+    async pull(ctl) {
+      while (true) {
+        if (i >= info.count) { ctl.close(); return; }
+        try {
+          if (!body) {
+            for (let k = i; k < i + AHEAD; k++) want(k);
+            const r = await pending.get(i);
+            if (!r.body) throw new Error('ReadableStream not supported for the bundle');
+            body = r.body.getReader();
+            read = 0;
+          }
+          const { done, value } = await body.read();
+          if (done) {
+            if (read !== length(i)) throw new Error(`bundle chunk ${i}: ${read} of ${length(i)} bytes`);
+            pending.delete(i);
+            body = null, sent = 0, attempt = 0, i++;
+            continue;
+          }
+          const skip = Math.max(0, sent - read);  /* bytes a broken-off try already gave */
+          read += value.length;
+          if (skip >= value.length) continue;
+          const out = skip ? value.subarray(skip) : value;
+          sent += out.length;
+          ctl.enqueue(out);
+          return;
+        } catch (e) {
+          body = null;
+          pending.delete(i);
+          if (++attempt > 3) throw e;
+          await new Promise((res) => setTimeout(res, 1000 * attempt));
+        }
+      }
+    },
+  });
+  return { total: info.size, reader: stream.getReader() };
+}
+
 async function importBundle(base, loadText, loadBar, loadSub) {
   setLoadPhase('Step 1/2 · Game Assets');
-  const r = await fetchRetry('install/bundle.tar', { cache: 'no-store' });
-  const total = parseInt(r.headers.get('content-length') || '0', 10);
+  const { total, reader } = await openBundle();
   if (total > 0) await checkStorage(total);
-  if (!r.body) throw new Error('ReadableStream not supported for bundle.tar');
 
   loadText.textContent = 'Downloading & caching game files…';
   loadBar.value = 0;
@@ -227,7 +290,6 @@ async function importBundle(base, loadText, loadBar, loadSub) {
   let curDir = base;
   let curName = '';
 
-  const reader = r.body.getReader();
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
