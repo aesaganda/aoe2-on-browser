@@ -74,7 +74,8 @@ web: $(GEN_STAMP)
 sweep: $(GEN_STAMP)
 	$(PY) tools/lift/sweep.py $(EXE) $(GEN) $(BUILD)/ghidra/leaves.json --out $(BUILD)/lift/sweep.json | tee $(BUILD)/lift/sweep.log
 
-# Multi-arch web/relay image -> ghcr.io (needs `docker login ghcr.io`, docker-buildx,
+# Multi-arch web/relay image -> ghcr.io; CI does this on push to main (.github/workflows/images.yml).
+# By hand (needs `docker login ghcr.io`, docker-buildx,
 # qemu-user-static; docs/docker-nginx.md section 6). Tags :latest and :sha-<commit>.
 IMAGE          ?= ghcr.io/aesaganda/aoe2-recomp-web
 IMAGE_PLATFORMS ?= linux/amd64,linux/arm64,linux/arm/v7
