@@ -164,7 +164,8 @@ async function openBundle() {
   const pending = new Map();
   const want = (k) => {
     if (k >= info.count || pending.has(k)) return;
-    const p = fetchRetry(`install/bundle/${info.tag}/${k}.tar`);
+    /* no-store: the files end up in OPFS, so a second copy in the HTTP cache only wastes disk */
+    const p = fetchRetry(`install/bundle/${info.tag}/${k}.tar`, { cache: 'no-store' });
     p.catch(() => {});                  /* awaited (and reported) when its turn comes */
     pending.set(k, p);
   };
