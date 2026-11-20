@@ -150,7 +150,20 @@ The `relay` and `web` services are plain Python (`websockets` only) and the game
 | Mac with Apple Silicon (Docker Desktop, OrbStack, Colima) | `linux/arm64` |
 | Intel Mac, x86 Linux | `linux/amd64` |
 
-**What the image does not contain** (ADR-0002): `build/web/` (`aoe2.js`, `aoe2.wasm`) and the `install/` game data. Build them on the x86 Linux/WSL machine (`make web`) and copy them to the Pi/Mac; the `.wasm` is architecture-independent. Then on the Pi/Mac:
+**What the image does not contain** (ADR-0002): `build/web/` (`aoe2.js`, `aoe2.wasm`) and the `install/` game data. Build them on the x86 Linux/WSL machine (`make web`) and copy them to the Pi/Mac; the `.wasm` is architecture-independent.
+
+The turnkey way is to pack both into one verified archive on the build host and unpack + start with one command on the Pi/Mac:
+
+```bash
+# On the build host:
+./play.sh --pack aoe2-bundle.tar.gz
+
+# On the Pi/Mac (no submodules, ISO, or build needed):
+git clone https://github.com/aesaganda/aoe2-on-browser.git && cd aoe2-on-browser
+./play.sh --bundle ssh://user@build-host/path/to/aoe2-bundle.tar.gz --bundle-sha256 <SHA256>
+```
+
+Or copy the folders manually with `rsync`:
 
 ```bash
 git clone https://github.com/aesaganda/aoe2-on-browser.git && cd aoe2-on-browser

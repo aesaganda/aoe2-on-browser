@@ -36,3 +36,9 @@ pytest.ini
 *.rep/
 install/
 install.tmp/
+bundle.tmp/
+aoe2-bundle*.tar
+aoe2-bundle*.tar.gz
+aoe2-bundle*.tgz
+aoe2-bundle*.sha256
+*.bundle.tar.gz

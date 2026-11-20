@@ -36,3 +36,11 @@ Thumbs.db
 # play.sh: the install tree laid out from your discs
 /install/
 /install.tmp/
+
+# Turnkey prebuilt bundles (user-supplied, never committed)
+/bundle.tmp/
+aoe2-bundle*.tar
+aoe2-bundle*.tar.gz
+aoe2-bundle*.tgz
+aoe2-bundle*.sha256
+*.bundle.tar.gz

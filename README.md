@@ -32,6 +32,32 @@ data, and nothing generated from the game's code (ADR-0002). Put your
 
 ## Play it: one command (Docker)
 
+### Turnkey: from a prebuilt bundle (no ISO, no build)
+
+The public repository stays free of copyrighted game assets (ADR-0002), so you host
+your own bundle privately (for example S3/R2, a private GitHub Release, or SSH).
+On a machine where `build/web/` and `install/` already exist, pack them once:
+
+```bash
+./play.sh --pack aoe2-bundle.tar.gz   # also writes aoe2-bundle.tar.gz.sha256
+```
+
+Then on any new machine (without `--recursive` submodules, ISOs, or compilers):
+
+```bash
+git clone https://github.com/aesaganda/aoe2-on-browser
+cd aoe2-on-browser
+./play.sh --bundle https://your-private-url/aoe2-bundle.tar.gz --bundle-sha256 <SHA256>
+```
+
+Supported `--bundle` sources (also configurable via `AOE2_BUNDLE_URL` and
+`AOE2_BUNDLE_SHA256` in `.env`): `https://` / `http://` (set `AOE2_BUNDLE_TOKEN`
+in your shell for Bearer auth, never committed to `.env`), `gh://owner/repo[@tag]/asset`,
+`ssh://user@host/path`, or a local `.tar.gz`/`.tar` file. Use `./play.sh --refresh-bundle`
+to pull a newer bundle later.
+
+### From your own discs and executable
+
 All you need is Docker (Linux, macOS, or Windows with WSL 2), your two disc
 images and your unprotected `age2_x1.exe`:
 
