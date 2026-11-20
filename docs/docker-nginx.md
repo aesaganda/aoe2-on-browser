@@ -164,6 +164,7 @@ docker compose up -d --no-build
 
 Notes:
 - On a Pi, keep `install/` on an SSD rather than the SD card: `web` streams the ~585 MB `/install/bundle.tar` from it to each new player.
+- The page fetches that bundle as 32 MiB chunks, `/install/bundle/<tag>/<i>.tar` (listed in `/install/bundle.json`), with `Cache-Control: public, max-age=31536000, immutable`. Behind Cloudflare the edge caches them (`.tar` is cached by default, and each chunk is under the free plan's 512 MB limit), so the origin uploads the game once per edge location instead of once per player. `<tag>` changes whenever the install tree changes. Servers without `bundle.json` fall back to the one-piece `/install/bundle.tar`.
 - On macOS, the bind-mounted folders must be inside a path Docker Desktop shares (by default `/Users`).
 - `docker compose up -d --build` still works on any of these hosts; it builds natively for the host's architecture.
 

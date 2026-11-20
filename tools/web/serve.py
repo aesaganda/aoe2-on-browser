@@ -20,6 +20,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import signal
 import socketserver
 import subprocess
@@ -86,7 +87,13 @@ MIME_TYPES = {
 }
 
 CACHE_LONG = "public, max-age=86400, immutable"
+CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
 CACHE_SHORT = "no-cache"
+# The bundle is also served as fixed-size chunks under a versioned URL
+# (/install/bundle/<tag>/<i>.tar) so a CDN can cache them: Cloudflare's free plan
+# does not cache a response over 512 MB, and the whole bundle is larger.
+BUNDLE_CHUNK = 32 << 20
+BUNDLE_CHUNK_RE = re.compile(r"^/install/bundle/([0-9a-f-]+)/(\d+)\.tar$")
 LONG_CACHE_EXT = {".wasm", ".data"}
 
 
@@ -121,6 +128,43 @@ def bundle_index(install):
 
 def bundle_size(entries):
     return sum(512 + ((size + 511) & ~511) for _, _, size, _ in entries) + 1024
+
+
+def bundle_tag(etag):
+    return (etag or "").strip('"')
+
+
+def bundle_pieces(entries, start, end):
+    """Yield bytes [start, end) of the bundle's tar stream without building it."""
+    pos = 0
+    for rel, full, size, mtime in entries:
+        span = 512 + ((size + 511) & ~511)
+        if pos + span <= start:
+            pos += span
+            continue
+        if pos >= end:
+            return
+        if start < pos + 512:
+            yield _tar_header(rel, size, mtime)[max(0, start - pos):min(512, end - pos)]
+        data = pos + 512
+        lo, hi = max(start, data), min(end, data + size)
+        if lo < hi:
+            with open(full, "rb") as f:
+                f.seek(lo - data)
+                rem = hi - lo
+                while rem > 0:
+                    chunk = f.read(min(STREAM_CHUNK, rem))
+                    if not chunk:
+                        raise IOError(f"short read on {full}")
+                    yield chunk
+                    rem -= len(chunk)
+        lo, hi = max(start, data + size), min(end, pos + span)
+        if lo < hi:
+            yield b"\0" * (hi - lo)
+        pos += span
+    lo, hi = max(start, pos), min(end, pos + 1024)
+    if lo < hi:
+        yield b"\0" * (hi - lo)
 
 
 def _tar_header(rel_path, size, mtime):
@@ -320,8 +364,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                          "frame-ancestors 'none'")
         p = urllib.parse.urlsplit(self.path).path
         ext = os.path.splitext(p)[1].lower()
-        is_install_file = p.startswith("/install/") and p != "/install/manifest.json"
-        self.send_header("Cache-Control", CACHE_LONG if (ext in LONG_CACHE_EXT or is_install_file) else CACHE_SHORT)
+        is_install_file = p.startswith("/install/") and p not in ("/install/manifest.json", "/install/bundle.json")
+        if p.startswith("/install/bundle/"):
+            cache = CACHE_IMMUTABLE
+        elif ext in LONG_CACHE_EXT or is_install_file:
+            cache = CACHE_LONG
+        else:
+            cache = CACHE_SHORT
+        self.send_header("Cache-Control", cache)
         super().end_headers()
 
     def install_allowed(self):
@@ -604,20 +654,47 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             if self.command == "HEAD":
                 return
-            for rel, full, size, mtime in entries:
-                self.wfile.write(_tar_header(rel, size, mtime))
-                rem = size
-                with open(full, "rb") as f:
-                    while rem > 0:
-                        chunk = f.read(min(STREAM_CHUNK, rem))
-                        if not chunk:
-                            raise IOError(f"short read on {full}")
-                        self.wfile.write(chunk)
-                        rem -= len(chunk)
-                pad = (-size) & 511
-                if pad:
-                    self.wfile.write(b"\0" * pad)
-            self.wfile.write(b"\0" * 1024)
+            for piece in bundle_pieces(entries, 0, total):
+                self.wfile.write(piece)
+            return
+
+        if path == "/install/bundle.json":
+            if not self.install_allowed():
+                self.send_error(404)
+                return
+            _, total, etag = self.get_bundle()
+            body = json.dumps({"tag": bundle_tag(etag), "size": total, "chunk": BUNDLE_CHUNK,
+                               "count": (total + BUNDLE_CHUNK - 1) // BUNDLE_CHUNK}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+            return
+
+        m = BUNDLE_CHUNK_RE.match(path)
+        if m:
+            if not self.install_allowed():
+                self.send_error(404)
+                return
+            entries, total, etag = self.get_bundle()
+            i = int(m.group(2))
+            start = i * BUNDLE_CHUNK
+            if m.group(1) != bundle_tag(etag) or start >= total:
+                self.send_error(404)
+                return
+            end = min(total, start + BUNDLE_CHUNK)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-tar")
+            self.send_header("ETag", '"%s-%d"' % (bundle_tag(etag), i))
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Content-Length", str(end - start))
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            for piece in bundle_pieces(entries, start, end):
+                self.wfile.write(piece)
             return
 
         if path == "/install/manifest.json":
