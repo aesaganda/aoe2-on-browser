@@ -1092,7 +1092,19 @@ function setStatus(ok, text, onlinePlayers = 0, openRooms = 0) {
   }
 }
 
-const playerName = () => ($('player').value.trim() || 'Player').slice(0, 15);
+// An empty name field used to make everyone "Player", and the game can't tell two
+// same-named players apart (a restored game matches players to slots by name).
+// ponytail: 4 random digits, 1-in-9000 clash between two browsers.
+const defaultPlayerName = (() => {
+  let n = '';
+  try { n = localStorage.getItem('aoe2.defaultName') || ''; } catch {}
+  if (!n) {
+    n = `Player-${1000 + Math.floor(Math.random() * 9000)}`;
+    try { localStorage.setItem('aoe2.defaultName', n); } catch {}
+  }
+  return n;
+})();
+const playerName = () => ($('player').value.trim() || defaultPlayerName).slice(0, 15);
 let currentInviteUrl = '';
 
 function buildInviteUrl(room) {
@@ -2236,6 +2248,7 @@ for (const evt of ['keyup', 'keypress']) {
   }, true);
 }
 
+$('player').placeholder = defaultPlayerName;
 try { $('player').value = localStorage.getItem('aoe2.player') || ''; } catch {}
 $('player').oninput = () => { try { localStorage.setItem('aoe2.player', $('player').value); } catch {} };
 try { $('roomname').value = localStorage.getItem('aoe2.room') || ''; } catch {}
