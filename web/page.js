@@ -602,6 +602,14 @@ async function showSaves(forceOpen = false) {
       if (!remaining) list.textContent = 'No saved games, replays, or scenarios yet.';
       $('save-count').textContent = remaining ? `${remaining} saved file${remaining > 1 ? 's' : ''}` : '';
     };
+    if (f.meta.cls === 'mp') {
+      const host = document.createElement('button');
+      host.textContent = 'Host';
+      host.title = `Host "${f.name}" as a multiplayer game (uses Your Name / Room Name / Password above)`;
+      host.style.cssText = 'margin:0;padding:3px 9px;font-size:12px';
+      host.onclick = () => hostGame(f.name);
+      actions.append(host);
+    }
     actions.append(dl, del);
     row.append(info, actions);
     list.append(row);
@@ -1105,6 +1113,8 @@ const defaultPlayerName = (() => {
   return n;
 })();
 const playerName = () => ($('player').value.trim() || defaultPlayerName).slice(0, 15);
+// A multiplayer save's bare file name (from a URL or another player's room), or undefined
+const saveName = (n) => (typeof n === 'string' && /^[^\\/:]{1,200}\.msx$/i.test(n) ? n : undefined);
 let currentInviteUrl = '';
 
 function buildInviteUrl(room) {
@@ -1329,7 +1339,7 @@ async function listRooms() {
         if (entered === null) return;
         password = entered;
       }
-      play({ lobby: 'join:' + r.id, room: r.name, password });
+      play({ lobby: 'join:' + r.id, room: r.name, password, restore: saveName(r.restore) });
     };
 
     const link = document.createElement('button');
@@ -1714,9 +1724,11 @@ async function play(launch) {
     } catch {}
     const u = new URL(location.href);
     if (launch.lobby === 'host') {
-      u.search = `?host=1&room=${encodeURIComponent(launch.room || '')}`;
+      u.search = `?host=1&room=${encodeURIComponent(launch.room || '')}`
+        + (launch.restore ? `&restore=${encodeURIComponent(launch.restore)}` : '');
     } else if (launch.lobby.startsWith('join:')) {
-      u.search = `?join=${encodeURIComponent(launch.lobby.slice(5))}&room=${encodeURIComponent(launch.room || '')}`;
+      u.search = `?join=${encodeURIComponent(launch.lobby.slice(5))}&room=${encodeURIComponent(launch.room || '')}`
+        + (launch.restore ? `&restore=${encodeURIComponent(launch.restore)}` : '');
     } else {
       u.search = '';
     }
@@ -1767,7 +1779,9 @@ async function play(launch) {
   const wasmUrl = 'aoe2.wasm' + verSuffix;
   const jsUrl = 'aoe2.js' + verSuffix;
   const wasmSize = serverWasmSize || (43 * 1e6);
-  const debugTrace = new URLSearchParams(location.search).has('debug');
+  // ?debug, or sessionStorage aoe2.debug=1 (survives the host/join reloads that drop the query)
+  let debugTrace = new URLSearchParams(location.search).has('debug');
+  try { debugTrace ||= sessionStorage.getItem('aoe2.debug') === '1'; } catch {}
   const config = {
     canvas,
     arguments: [],
@@ -1841,13 +1855,14 @@ async function play(launch) {
       activeModule = m;
       m.ENV.AOE2_ACCEPT_EULA = '1';
       m.ENV.AOE2_RESOLUTION = launchedRes;
-      if (debugTrace) m.ENV.AOE2_TRACE_VIDEO = '1';
+      if (debugTrace) m.ENV.AOE2_TRACE_VIDEO = '1', m.ENV.AOE2_TRACE_DPLAY = '1', m.ENV.HLE_FILETRACE = '1';
       if (launch && launch.lobby) {
         m.ENV.AOE2_ARGS = 'LOBBY';
         m.ENV.AOE2_LOBBY = launch.lobby;
         m.ENV.AOE2_ROOM = launch.room || '';
         m.ENV.AOE2_PLAYER = playerName();
         if (launch.password) m.ENV.AOE2_PASSWORD = launch.password;
+        if (launch.restore) m.ENV.AOE2_RESTORE = launch.restore;   // dplay_stub.c: lobby restore preset
       }
     }],
     setStatus(text) {
@@ -2014,14 +2029,16 @@ async function init() {
         }
       }
       if (!openLobbyOnBoot) {
-        launch = { lobby: 'join:' + joinId, room: (target && target.name) || roomParam, password: pendingPass };
+        // restore: the room's saved game (relay), which every player loads from their own save
+        launch = { lobby: 'join:' + joinId, room: (target && target.name) || roomParam, password: pendingPass,
+          restore: saveName((target && target.restore) || params.get('restore')) };
         log('Joining game from invite link…');
       }
     }
   } else if (hostParam) {
     history.replaceState(null, '', location.pathname);
     const room = (roomParam || `${playerName()}'s game`).slice(0, 30);
-    launch = { lobby: 'host', room, password: pendingPass };
+    launch = { lobby: 'host', room, password: pendingPass, restore: saveName(params.get('restore')) };
     hostedRoom = room;
     knownPlayers = new Set([playerName()]);
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
@@ -2071,15 +2088,17 @@ async function init() {
 $('online-btn').onclick = () => { if ($('setup').hidden) openOnline(); else closeOnline(); };
 if ($('hud-room-pill')) $('hud-room-pill').onclick = () => { if ($('setup').hidden) openOnline(); else closeOnline(); };
 $('play').onclick = () => { if (gameRunning) closeOnline(); else play(); };
-$('host').onclick = () => {
+// restore: a multiplayer save's file name, to host that saved game instead of a new one
+function hostGame(restore) {
   const room = ($('roomname').value.trim() || `${playerName()}'s game`).slice(0, 30);
   const password = $('roompass') ? $('roompass').value.trim() : '';
   if ($('roompass')) $('roompass').value = '';
   hostedRoom = room;
   knownPlayers = new Set([playerName()]);
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
-  play({ lobby: 'host', room, password });
-};
+  play({ lobby: 'host', room, password, restore });
+}
+$('host').onclick = () => hostGame();
 if ($('res-select')) {
   $('res-select').onchange = () => {
     const val = $('res-select').value;

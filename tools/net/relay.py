@@ -16,7 +16,7 @@ pointers are ignored) followed by str name, str password.
   client -> server                           server -> client
   1  HELLO     str name                      100 REPLY    u32 req, u32 hresult, body
   2  LIST      guid application              101 MSG      u32 from, u32 to, blob
-  3  CREATE    desc                          102 SYS_NEWPLAYER   player, u32 count
+  3  CREATE    desc [, str restore]          102 SYS_NEWPLAYER   player, u32 count
   4  JOIN      guid instance, str password   103 SYS_DELPLAYER   player, u32 count
   5  NEWPLAYER u32 flags, str, str, blob     104 SYS_SETDESC     desc
   6  DELPLAYER u32 id                        105 SYS_SETPDATA    u32 id, blob
@@ -132,11 +132,12 @@ class Player:
 
 
 class Room:
-    __slots__ = ("desc", "name", "password", "host", "players", "conns", "created", "last_active")
+    __slots__ = ("desc", "name", "password", "host", "players", "conns", "created", "last_active", "restore")
 
-    def __init__(self, desc, name, password, host):
+    def __init__(self, desc, name, password, host, restore=b""):
         self.desc = bytearray(desc)
         self.name, self.password, self.host = name, password, host
+        self.restore = restore            # a multiplayer save's file name, when the host restores one
         self.players = {}
         self.conns = {host}
         now = time.monotonic()
@@ -258,8 +259,9 @@ class Relay:
                 return await self.reply(c, req, DPERR_GENERIC)
             await self.leave(c)
             desc, name, password = bytearray(r.raw(80)), r.str(), r.str()
+            restore = r.str() if r.remaining() else b""
             desc[8:24] = os.urandom(16)
-            room = Room(desc, name, password, c)
+            room = Room(desc, name, password, c, restore)
             self.rooms[room.instance] = room
             c.room = room
             log.info("#%d created room %r (max %d, application %s)", c.n, name, room.max_players(), bytes(desc[24:40]).hex())
@@ -559,6 +561,7 @@ def create_relay_handlers(relay, max_conns=MAX_CONNS, max_conns_per_ip=MAX_CONNS
                 "max": min(r.max_players(), MAX_PLAYERS_PER_ROOM),
                 "open": not flags & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED),
                 "password": bool(r.password),
+                "restore": r.restore.decode("cp1252", "replace"),
             })
         body = json.dumps({"rooms": rooms, "chat": relay.chat_log, "online": relay.conn_count}).encode()
         return _build_http_response(arg1, http.HTTPStatus.OK, json_headers, body)

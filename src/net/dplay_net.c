@@ -163,6 +163,31 @@ static void sys_msg(uint32_t type, const player_t *p) {
     queue(m);
 }
 
+/* A lobby restore (AOE2_RESTORE, the room's save, for every player): the game takes a
+ * joining player's slot in the saved game from the first character of its long name, as
+ * the Zone set it (0x42D0C6; "Bob" reads as slot 0 and is turned away). Find it by name in
+ * the save's header: players 1-8 at 0x5D4 + 0xA0 * n, name first. */
+static void restore_slot(player_t *p) {
+    const char *file = getenv("AOE2_RESTORE");
+    char guest[300], host[1024];
+    uint8_t h[0xE48];
+    if (!file) return;
+    snprintf(guest, sizeof guest, "savegame\\multi\\%s", file);
+    FILE *f = hle_host_path(guest, host, sizeof host) ? fopen(host, "rb") : NULL;
+    if (!f) return;
+    size_t n = fread(h, 1, sizeof h, f);
+    fclose(f);
+    size_t len = strlen(p->short_name) + 1;
+    for (int i = 1; n == sizeof h && i <= 8; i++)
+        if (len <= 0xA0 && !memcmp(h + 0x5D4 + 0xA0 * i, p->short_name, len)) {
+            char s[4];
+            snprintf(s, sizeof s, "%d", i);
+            free(p->long_name), p->long_name = strdup(s);
+            TRACE("restore: \"%s\" is player %d of the save\n", p->short_name, i);
+            return;
+        }
+}
+
 static void read_desc(rd_t *r) {
     const uint8_t *d = get(r, 80);
     if (d) memcpy(S.desc, d, 80);
@@ -196,6 +221,7 @@ static void apply(const uint8_t *b, size_t n) {
         player_t *p = read_player(&r);
         get32(&r);
         if (find(p->id)) { free_player(p); break; }
+        restore_slot(p);
         p->next = S.players, S.players = p;
         sys_msg(DPSYS_CREATEPLAYERORGROUP, p);
         TRACE("player %08X \"%s\" joined\n", p->id, p->short_name);
@@ -352,7 +378,10 @@ static uint32_t open_session(const uint8_t *desc, const char *name, const char *
     memcpy(d, desc, 80);
     memset(d + 48, 0, 8);
     buf_t w = frame(flags & DPOPEN_CREATE ? CREATE : JOIN);
-    if (flags & DPOPEN_CREATE) put(&w, d, 80), putstr(&w, name), putstr(&w, pw);
+    if (flags & DPOPEN_CREATE) {
+        put(&w, d, 80), putstr(&w, name), putstr(&w, pw);
+        if (getenv("AOE2_RESTORE")) putstr(&w, getenv("AOE2_RESTORE"));   /* the room's restore, for joiners' pages */
+    }
     else put(&w, d + 8, 16), putstr(&w, pw);
     TRACE("Open %s \"%s\"\n", flags & DPOPEN_CREATE ? "create" : "join", name);
     uint32_t hr = request(&w);
@@ -796,6 +825,9 @@ uint32_t dplay_net_lobby_settings(uint32_t buf, uint32_t psize) {
     lobby_desc(d, mode == 1 ? inst : NULL);
     memcpy(hle_ptr(sd), d, 80);
     MEM32(sd + 48) = rs;
+    /* dwUser1 = 1: the game's lobby restore (0x5D1DF0) closes its window unless the
+     * lobby's session has it (0x4377A8 keeps dwUser1 != 1 at lobby+0x198) */
+    if (getenv("AOE2_RESTORE")) MEM32(sd + 64) = 1;
     MEM32(buf) = 40, MEM32(buf + 4) = mode == 2 ? DPOPEN_CREATE : DPOPEN_JOIN, MEM32(buf + 8) = sd, MEM32(buf + 12) = nm;
     memcpy(hle_ptr(buf + 16), SP_ONLINE_GUID, 16);
     MEM32(buf + 32) = 0, MEM32(buf + 36) = 0;
