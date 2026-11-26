@@ -62,13 +62,36 @@ static void lb_SetConnectionSettings(void) { RET(dplay_net_lobby_set(A32(3)), 4)
  * answer has come (satisfyLobbyLaunchCriteria, 0x437DE0). We are the lobby and have
  * no presets: we answer "not supported", which the game takes as retrieved
  * (0x437D5A, "PresetData not supported") and launches at once. Other messages
- * (status for the lobby) have nobody to read them. */
+ * (status for the lobby) have nobody to read them.
+ *
+ * Restoring a saved game is the one preset we do send (AOE2_RESTORE=<save file>,
+ * host only). The game takes a reply whose hr is DP_OK and whose data is exactly
+ * 0x174 bytes (AgePresetData, copied to lobby+0x20 at 0x437AE6). With m_bGameType
+ * 7 or 8, satisfyLobbyLaunchCriteria calls 0x5D1DF0 with 1 ("Got
+ * COMM_LOBBY_RESTORE_GAME"), which loads the header of m_sGameFilename (0x43D410:
+ * a name without a backslash is taken from the game's save folder) and opens the
+ * setup screen in restore mode. The other fields are the defaults 0x5D1DF0 itself
+ * fills in before copying the preset over them. */
 #define DPLSYS_GETPROPERTY          7u
 #define DPLSYS_GETPROPERTYRESPONSE  8u
 #define DPERR_NOMESSAGES            0x887700BEu
 #define DPERR_BUFFERTOOSMALL        0x8877001Eu
-static uint8_t g_lobby_reply[0x34];                   /* DPLMSG_GETPROPERTYRESPONSE */
+#define PRESET_SIZE                 0x174u
+static uint8_t g_lobby_reply[0x30 + PRESET_SIZE];     /* DPLMSG_GETPROPERTYRESPONSE + data */
+static uint32_t g_lobby_reply_size;
 static int g_lobby_reply_pending;
+
+/* AgePresetData for a restore of `file` into p (PRESET_SIZE bytes) */
+static void restore_preset(uint8_t *p, const char *file) {
+    memset(p, 0, PRESET_SIZE);
+    memset(p, 1, 20);                                   /* m_bCivAvail[20] */
+    p[0x15] = 7;                                        /* m_bGameType: restore */
+    strncpy((char *)p + 0x17, file, 259);               /* m_sGameFilename[260] */
+    memset(p + 0x11B, 1, 37);                           /* m_bMapTypeAvail[37] */
+    p[0x141] = 2, p[0x143] = 2;                         /* map size, difficulty */
+    p[0x148] = 100;                                     /* population (u32) */
+    p[0x14D] = 1, p[0x167] = 0x13, p[0x169] = 1, p[0x16B] = 1, p[0x16D] = 1, p[0x16F] = 3;
+}
 
 static void lb_SendLobbyMessage(void) {                 /* (this, flags, appid, data, size) */
     uint32_t data = A32(3), size = A32(4);
@@ -79,16 +102,25 @@ static void lb_SendLobbyMessage(void) {                 /* (this, flags, appid, 
         r[0] = DPLSYS_GETPROPERTYRESPONSE;
         r[1] = MEM32(data + 4);
         for (int i = 0; i < 8; i++) r[2 + i] = MEM32(data + 8 + 4 * i);   /* both GUIDs */
-        r[10] = DPERR_UNSUPPORTED;                      /* hr: no such property here */
-        r[11] = 0;                                      /* dwDataSize */
+        const char *restore = getenv("AOE2_RESTORE");
+        if (restore && *restore) {
+            r[10] = DP_OK, r[11] = PRESET_SIZE;
+            restore_preset(g_lobby_reply + 0x30, restore);
+            g_lobby_reply_size = 0x30 + PRESET_SIZE;
+            TRACE("lobby GetProperty request %u -> restore \"%s\"\n", r[1], restore);
+        } else {
+            r[10] = DPERR_UNSUPPORTED;                  /* hr: no such property here */
+            r[11] = 0;                                  /* dwDataSize */
+            g_lobby_reply_size = 0x30;
+            TRACE("lobby GetProperty request %u -> not supported\n", r[1]);
+        }
         g_lobby_reply_pending = 1;
-        TRACE("lobby GetProperty request %u -> not supported\n", r[1]);
     }
     RET(DP_OK, 5);
 }
 static void lb_ReceiveLobbyMessage(void) {              /* (this, flags, appid, &msgflags, data, &size) */
     if (!g_lobby_reply_pending) RET(DPERR_NOMESSAGES, 6);
-    uint32_t psize = A32(5), need = sizeof g_lobby_reply;
+    uint32_t psize = A32(5), need = g_lobby_reply_size;
     if (!psize) RET(DPERR_BUFFERTOOSMALL, 6);
     if (!A32(4) || MEM32(psize) < need) { MEM32(psize) = need; RET(DPERR_BUFFERTOOSMALL, 6); }
     memcpy(hle_ptr(A32(4)), g_lobby_reply, need);
